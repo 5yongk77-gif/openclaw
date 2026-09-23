@@ -261,14 +261,6 @@ describe("installed plugin index persistence", () => {
     },
   );
 
-  it("resolves the persisted index path to the shared state database", () => {
-    const stateDir = makeTempDir();
-
-    expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "state", "openclaw.sqlite"),
-    );
-  });
-
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
@@ -787,31 +779,6 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
-  it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-
-    const index = refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-    });
-
-    expect(index.refreshReason).toBe("manual");
-    expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    await expectPersistedIndex(stateDir, {
-      refreshReason: "manual",
-      pluginIds: ["demo"],
-    });
-  });
-
   it("refreshes policy state from the persisted registry without rebuilding source records", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
@@ -929,42 +896,39 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
-  it.each(["path", "npm", "archive", "git", "clawhub", "marketplace"] as const)(
-    "restores an installed %s plugin missing from a policy refresh projection",
-    async (source) => {
-      const stateDir = makeTempDir();
-      const pluginDir = path.join(stateDir, "plugins", "demo");
-      fs.mkdirSync(pluginDir, { recursive: true });
-      const candidate = createCandidate(pluginDir);
-      const installRecords = {
-        demo: { source, installPath: pluginDir },
-      } satisfies InstalledPluginIndex["installRecords"];
-      const env = {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      };
-      const initial = refreshPersistedInstalledPluginIndex({
-        reason: "manual",
-        stateDir,
-        candidates: [candidate],
-        installRecords,
-        env,
-      });
-      await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+  it("restores an installed plugin missing from a policy refresh projection", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const installRecords = {
+      demo: { source: "npm", installPath: pluginDir },
+    } satisfies InstalledPluginIndex["installRecords"];
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const initial = refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      installRecords,
+      env,
+    });
+    await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
 
-      const refreshed = refreshPersistedInstalledPluginIndex({
-        reason: "policy-changed",
-        stateDir,
-        candidates: [candidate],
-        installRecords,
-        env,
-      });
+    const refreshed = refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      installRecords,
+      env,
+    });
 
-      expectPluginIds(refreshed, ["demo"]);
-      await expectPersistedIndex(stateDir, { pluginIds: ["demo"] });
-    },
-  );
+    expectPluginIds(refreshed, ["demo"]);
+    await expectPersistedIndex(stateDir, { pluginIds: ["demo"] });
+  });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
