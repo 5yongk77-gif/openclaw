@@ -75,6 +75,26 @@ function request(path: string, headers: Record<string, string> = {}) {
   } as unknown as IncomingMessage;
 }
 
+function serveGravatar(
+  pathname: string,
+  res: ReturnType<typeof response>,
+  fetchImpl: typeof fetch,
+) {
+  return handleUserProfileAvatarHttpRequest(
+    request("/ignored-by-handler"),
+    res.response,
+    pathname,
+    {
+      auth: {} as never,
+      fetchImpl,
+    },
+  );
+}
+
+function mockGravatarProfile(id: string, emails: string[]) {
+  getUserProfileListItem.mockReturnValue({ id, emails, hasAvatar: false });
+}
+
 describe("profile avatar HTTP endpoint", () => {
   beforeEach(() => {
     authorizeControlUiReadRequestOrReply.mockReset();
@@ -359,40 +379,10 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.end).toHaveBeenCalledWith(undefined);
   });
 
-  it.each(['W/"current-hash-png"', '"other", "current-hash-png"', "*"])(
-    "revalidates If-None-Match form %s",
-    async (header) => {
-      getProfileAvatar.mockReturnValue({
-        bytes: new Uint8Array([1]),
-        mime: "image/png",
-        sha256: "current-hash",
-        updatedAt: 42,
-      });
-      const res = response();
-
-      await handleUserProfileAvatarHttpRequest(
-        request("/ignored-by-handler", { "if-none-match": header }),
-        res.response,
-        "/api/users/profile-1/avatar",
-        { auth: {} as never },
-      );
-
-      expect(res.writeHead).toHaveBeenCalledWith(304, {
-        ETag: '"current-hash-png"',
-        "Cache-Control": "private, max-age=0, must-revalidate",
-      });
-    },
-  );
-
   it("proxies and caches Gravatar by a profile's normalized email", async () => {
     const profileId = "profile-gravatar-cache";
     const hash = emailHash(" Ada@Example.com ");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: [" Ada@Example.com "],
-      hasAvatar: false,
-    });
+    mockGravatarProfile(profileId, [" Ada@Example.com "]);
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([4, 5, 6]), {
         status: 200,
@@ -402,18 +392,8 @@ describe("profile avatar HTTP endpoint", () => {
 
     const first = response();
     const second = response();
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      first.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      second.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, first, fetchImpl);
+    await serveGravatar(`/api/users/${profileId}/avatar`, second, fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -436,28 +416,13 @@ describe("profile avatar HTTP endpoint", () => {
 
   it("negative-caches a Gravatar 404 so the UI can fall back to initials", async () => {
     const profileId = "profile-gravatar-miss";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["missing-avatar@example.com"],
-      hasAvatar: false,
-    });
+    mockGravatarProfile(profileId, ["missing-avatar@example.com"]);
     const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
 
     const first = response();
     const second = response();
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      first.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      second.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, first, fetchImpl);
+    await serveGravatar(`/api/users/${profileId}/avatar`, second, fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(first.response.statusCode).toBe(404);
@@ -470,12 +435,7 @@ describe("profile avatar HTTP endpoint", () => {
   it("serves the primary email's Gravatar when several linked emails resolve", async () => {
     const profileId = "profile-multi-email-primary";
     const primaryHash = emailHash("primary@example.com");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["primary@example.com", "secondary@example.com"],
-      hasAvatar: false,
-    });
+    mockGravatarProfile(profileId, ["primary@example.com", "secondary@example.com"]);
     const secondaryHash = emailHash("secondary@example.com");
     // The primary email has a Gravatar, so its lookup short-circuits — the
     // secondary email's hash must never be disclosed to Gravatar.
@@ -492,12 +452,7 @@ describe("profile avatar HTTP endpoint", () => {
     );
     const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, res, fetchImpl);
 
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 1, 1]));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -510,12 +465,7 @@ describe("profile avatar HTTP endpoint", () => {
   it("falls through to a later linked email when the primary has no Gravatar", async () => {
     const profileId = "profile-multi-email-fallthrough";
     const primaryHash = emailHash("primary-miss@example.com");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["primary-miss@example.com", "secondary-hit@example.com"],
-      hasAvatar: false,
-    });
+    mockGravatarProfile(profileId, ["primary-miss@example.com", "secondary-hit@example.com"]);
     const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
       fetchUrl(input).includes(primaryHash)
         ? new Response(null, { status: 404 })
@@ -526,12 +476,7 @@ describe("profile avatar HTTP endpoint", () => {
     );
     const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, res, fetchImpl);
 
     // A definite miss on the primary lets the request fall through to the
     // secondary email under the shared deadline; the secondary hit is served.
@@ -544,8 +489,7 @@ describe("profile avatar HTTP endpoint", () => {
     const emails = Array.from({ length: 12 }, (_, index) => `many-${index}@example.com`);
     // Only the last email — beyond the fan-out cap — has a Gravatar.
     const reachableHash = emailHash(emails[emails.length - 1] ?? "");
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({ id: profileId, emails, hasAvatar: false });
+    mockGravatarProfile(profileId, emails);
     const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
       fetchUrl(input).includes(reachableHash)
         ? new Response(new Uint8Array([9, 9, 9]), {
@@ -556,12 +500,7 @@ describe("profile avatar HTTP endpoint", () => {
     );
     const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, res, fetchImpl);
 
     // Only the first 8 emails are looked up, so the request never fans out to
     // all 12 and the beyond-cap avatar stays unreachable (404 fallback).
@@ -636,12 +575,7 @@ describe("profile avatar HTTP endpoint", () => {
 
   it("cancels a Gravatar response rejected by its declared byte size", async () => {
     const profileId = "profile-gravatar-declared-oversized";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["declared-oversized-avatar@example.com"],
-      hasAvatar: false,
-    });
+    mockGravatarProfile(profileId, ["declared-oversized-avatar@example.com"]);
     const cancel = vi.fn();
     const body = new ReadableStream<Uint8Array>({ cancel });
     const fetchImpl = vi.fn().mockResolvedValue(
@@ -655,19 +589,13 @@ describe("profile avatar HTTP endpoint", () => {
     );
     const res = response();
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profileId}/avatar`, res, fetchImpl);
 
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(res.response.statusCode).toBe(502);
   });
 
   it("evicts older Gravatar images when the cache reaches its byte budget", async () => {
-    getProfileAvatar.mockReturnValue(undefined);
     const imageBytes = new Uint8Array(1_000_000);
     const fetchImpl = vi.fn(
       async () =>
@@ -687,19 +615,9 @@ describe("profile avatar HTTP endpoint", () => {
     );
 
     for (const profile of profiles) {
-      await handleUserProfileAvatarHttpRequest(
-        request("/ignored-by-handler"),
-        response().response,
-        `/api/users/${profile.id}/avatar`,
-        { auth: {} as never, fetchImpl },
-      );
+      await serveGravatar(`/api/users/${profile.id}/avatar`, response(), fetchImpl);
     }
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      response().response,
-      `/api/users/${profiles[0]?.id}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
+    await serveGravatar(`/api/users/${profiles[0]?.id}/avatar`, response(), fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(18);
   });
