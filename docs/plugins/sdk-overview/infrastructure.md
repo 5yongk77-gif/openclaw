@@ -289,6 +289,35 @@ drain in order. Use separate connections for concurrent requests. Keep the relea
 `beginWebhookRequestPipelineOrReject` in `finally`; it retains any selected
 rejection cleanup before releasing the in-flight slot.
 
+Webhook transports can register their handler with `registerPluginHttpRoute`
+from `openclaw/plugin-sdk/webhook-ingress`. Gateway owns the listener, connection
+admission, request scope, and route lease handoff; the channel owns its signature
+verification and bounded body read.
+
+For a shipped channel listener, registration can include
+`legacyListener: { port, host? }`. The Gateway forwards only requests for that
+registration's paths through the same HTTP dispatch, preserving the original
+socket and body. It leaves the callback URL intact, including paths that resemble
+Gateway node-capability URLs. It never exposes core HTTP endpoints on the compatibility port.
+Legacy listeners require `auth: "plugin"`: the channel continues authenticating
+its old callback path, including paths under `/api/channels`. The Gateway port
+keeps its protected-path authentication policy. This exception applies only to
+requests received on the compatibility port; it grants no Gateway operator scopes
+and does not waive channel signature checks or work admission.
+`getWebhookLegacyListener(req)` returns its frozen configured `{ port, host? }`
+endpoint, or `undefined` for an ordinary Gateway request; headers cannot set it.
+Filter account targets by this endpoint before signature resolution when old ports
+distinguished accounts sharing a path and secret. Ordinary Gateway requests still
+need an unambiguous account path or authentication identity.
+
+Account leases sharing a route can retain separate endpoints. Endpoints retained
+only by a restart handoff return retryable 503 responses; endpoints with live
+holders keep serving requests. A live holder at the same address takes precedence
+over a retained handoff.
+Bind failure warns without disabling the Gateway route. After the operator changes
+the provider callback or reverse proxy to reach the Gateway port, the plugin can
+stop registering the compatibility endpoint.
+
 Channel webhook listeners that own their `createServer` admission serialize each
 connection with `runHttpConnectionRequest(req, run, res?)` from
 `openclaw/plugin-sdk/webhook-request-guards`. Pass the `ServerResponse` as the
