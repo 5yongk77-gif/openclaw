@@ -274,17 +274,21 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
   });
 
-  it("returns 404 for missing flow mutations", async () => {
+  it.each([
+    { action: "set_waiting", expectedRevision: 0 },
+    { action: "resume_flow", expectedRevision: 0 },
+    { action: "finish_flow", expectedRevision: 0 },
+    { action: "fail_flow", expectedRevision: 0 },
+    { action: "request_cancel", expectedRevision: 0 },
+    { action: "cancel_flow" },
+    { action: "run_task", runtime: "acp", task: "Inspect a synthetic flow" },
+  ])("returns 404 for missing flow in $action", async (input) => {
     const { handler, target, secret } = createHandler();
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
       secret,
-      body: {
-        action: "set_waiting",
-        flowId: "flow-missing",
-        expectedRevision: 0,
-      },
+      body: { ...input, flowId: "flow-missing" },
     });
 
     expect(res.statusCode).toBe(404);
@@ -292,8 +296,57 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.code).toBe("not_found");
     expect(parsed.error).toBe("TaskFlow not found.");
-    expect(parsed.result.applied).toBe(false);
-    expect(parsed.result.code).toBe("not_found");
+    expect(parsed.result).toMatchObject(
+      input.action === "cancel_flow"
+        ? { found: false, cancelled: false }
+        : input.action === "run_task"
+          ? { found: false, created: false }
+          : { applied: false, code: "not_found" },
+    );
+  });
+
+  it.each([
+    ["run_task", "Flow cancellation has already been requested.", 409, "cancel_requested"],
+    ["run_task", "Flow does not accept managed child tasks.", 409, "not_managed"],
+    ["run_task", "Task persistence failed.", 503, "persist_failed"],
+    ["run_task", "Flow is already failed.", 409, "terminal"],
+    ["run_task", "", 409, "task_not_created"],
+    ["run_task", "toString", 409, "task_not_created"],
+    ["cancel_flow", "One or more child tasks are still active.", 202, "cancel_pending"],
+    ["cancel_flow", "Flow changed while cancellation was in progress.", 409, "revision_conflict"],
+    ["cancel_flow", "Flow persistence failed.", 503, "persist_failed"],
+    ["cancel_flow", "", 409, "cancel_rejected"],
+  ] as const)("maps %s rejection %j to HTTP %i", async (action, reason, statusCode, code) => {
+    const { handler, target, secret } = createHandler();
+    target.taskFlow.runTask = async () => ({ created: false, found: true, reason });
+    target.taskFlow.cancel = async () => ({ cancelled: false, found: true, reason });
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret,
+      body: {
+        action,
+        flowId: "synthetic-flow",
+        ...(action === "run_task" ? { runtime: "acp", task: "Inspect a synthetic flow" } : {}),
+      },
+    });
+
+    expect(res.statusCode).toBe(statusCode);
+    expect(parseJsonBody(res)).toEqual({
+      ok: statusCode < 400,
+      routeId: target.routeId,
+      code,
+      ...(statusCode >= 400
+        ? {
+            error:
+              action === "cancel_flow" && !reason ? "TaskFlow cancellation was rejected." : reason,
+          }
+        : {}),
+      result:
+        action === "run_task"
+          ? { created: false, found: true, reason }
+          : { cancelled: false, found: true, ...(reason ? { reason } : {}) },
+    });
   });
 
   it("returns 409 for revision conflicts", async () => {

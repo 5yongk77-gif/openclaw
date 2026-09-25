@@ -1,4 +1,3 @@
-// Webhooks plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,12 +15,7 @@ import {
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
 import type { WebhookSecretInput } from "./config.js";
-import {
-  formatZodError,
-  webhookActionSchema,
-  type JsonValue,
-  type WebhookAction,
-} from "./http-request-schema.js";
+import { formatZodError, webhookActionSchema, type WebhookAction } from "./http-request-schema.js";
 
 type BoundTaskFlowRuntime = ReturnType<
   PluginRuntime["tasks"]["async"]["managedFlows"]["bindSession"]
@@ -36,49 +30,14 @@ export type TaskFlowWebhookTarget = {
   taskFlow: BoundTaskFlowRuntime;
 };
 
-type FlowView = {
-  flowId: string;
-  syncMode: "task_mirrored" | "managed";
-  controllerId?: string;
-  revision: number;
-  status: string;
-  notifyPolicy: string;
-  goal: string;
-  currentStep?: string;
-  blockedTaskId?: string;
-  blockedSummary?: string;
-  stateJson?: JsonValue;
-  waitJson?: JsonValue;
-  cancelRequestedAt?: number;
-  createdAt: number;
-  updatedAt: number;
-  endedAt?: number;
-};
-
-type TaskView = {
-  taskId: string;
-  runtime: string;
-  sourceId?: string;
-  scopeKind: string;
-  childSessionKey?: string;
-  parentFlowId?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  status: string;
-  deliveryStatus: string;
-  notifyPolicy: string;
-  createdAt: number;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  cleanupAfter?: number;
+type FlowRecord = NonNullable<Awaited<ReturnType<BoundTaskFlowRuntime["get"]>>>;
+type TaskRecord = NonNullable<Awaited<ReturnType<BoundTaskFlowRuntime["cancel"]>>["tasks"]>[number];
+type FlowMutationResult = Awaited<ReturnType<BoundTaskFlowRuntime["setWaiting"]>>;
+type WebhookOutcome = {
+  statusCode: number;
+  code?: string;
   error?: string;
-  progressSummary?: string;
-  terminalSummary?: string;
-  terminalOutcome?: string;
+  result: unknown;
 };
 
 function pickOptionalFields<T extends object, TKey extends keyof T & string>(
@@ -103,13 +62,13 @@ function pickOptionalTruthyStringFields<T extends object, TKey extends keyof T &
   for (const key of keys) {
     const value = source[key];
     if (typeof value === "string" && value) {
-      result[key] = value as T[TKey];
+      result[key] = value;
     }
   }
   return result;
 }
 
-function toFlowView(flow: FlowView): FlowView {
+function toFlowView(flow: FlowRecord) {
   return {
     flowId: flow.flowId,
     syncMode: flow.syncMode,
@@ -130,7 +89,7 @@ function toFlowView(flow: FlowView): FlowView {
   };
 }
 
-function toTaskView(task: TaskView): TaskView {
+function toTaskView(task: TaskRecord) {
   return {
     taskId: task.taskId,
     runtime: task.runtime,
@@ -174,25 +133,17 @@ function extractSharedSecret(req: IncomingMessage): string {
   return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
-function mapFlowMutationResult(
-  result:
-    | {
-        applied: true;
-        flow: Parameters<typeof toFlowView>[0];
-      }
-    | {
-        applied: false;
-        code: string;
-        current?: Parameters<typeof toFlowView>[0];
-      },
-): unknown {
-  return result.applied
-    ? { applied: true, flow: toFlowView(result.flow) }
-    : {
-        applied: false,
-        code: result.code,
-        ...(result.current ? { current: toFlowView(result.current) } : {}),
-      };
+function mapFlowMutationResult(result: FlowMutationResult): WebhookOutcome {
+  return {
+    ...mapMutationStatus(result),
+    result: result.applied
+      ? { applied: true, flow: toFlowView(result.flow) }
+      : {
+          applied: false,
+          code: result.code,
+          ...(result.current ? { current: toFlowView(result.current) } : {}),
+        },
+  };
 }
 
 function mapMutationStatus(result: {
@@ -236,300 +187,139 @@ function mapMutationStatus(result: {
   }
 }
 
-function mapCreateFlowStatus(result: { created: boolean; code?: "persist_failed" }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  if (result.created) {
-    return { statusCode: 200 };
-  }
-  if (result.code === "persist_failed") {
-    return {
-      statusCode: 503,
-      code: "persist_failed",
-      error: "TaskFlow persistence failed.",
-    };
-  }
-  return {
-    statusCode: 409,
-    code: "create_rejected",
-    error: "TaskFlow creation was rejected.",
-  };
-}
+const operationRejectionCodes: Record<"run_task" | "cancel_flow", Record<string, string>> = {
+  run_task: {
+    "Flow cancellation has already been requested.": "cancel_requested",
+    "Flow does not accept managed child tasks.": "not_managed",
+    "Task persistence failed.": "persist_failed",
+  },
+  cancel_flow: {
+    "One or more child tasks are still active.": "cancel_pending",
+    "Flow changed while cancellation was in progress.": "revision_conflict",
+    "Flow persistence failed.": "persist_failed",
+  },
+};
 
-function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: string }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  if (result.created) {
-    return { statusCode: 200 };
-  }
+function mapOperationRejection(
+  action: keyof typeof operationRejectionCodes,
+  result: { found: boolean; reason?: string },
+): Omit<WebhookOutcome, "result"> {
   if (!result.found) {
-    return {
-      statusCode: 404,
-      code: "not_found",
-      error: "TaskFlow not found.",
-    };
+    return { statusCode: 404, code: "not_found", error: "TaskFlow not found." };
   }
-  if (result.reason === "Flow cancellation has already been requested.") {
-    return {
-      statusCode: 409,
-      code: "cancel_requested",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Flow does not accept managed child tasks.") {
-    return {
-      statusCode: 409,
-      code: "not_managed",
-      error: result.reason,
-    };
-  }
-  if (result.reason?.startsWith("Flow is already ")) {
-    return {
-      statusCode: 409,
-      code: "terminal",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Task persistence failed.") {
-    return {
-      statusCode: 503,
-      code: "persist_failed",
-      error: result.reason,
-    };
-  }
+  const codes = operationRejectionCodes[action];
+  const code = result.reason?.startsWith("Flow is already ")
+    ? "terminal"
+    : result.reason !== undefined && Object.hasOwn(codes, result.reason)
+      ? codes[result.reason]
+      : action === "run_task"
+        ? "task_not_created"
+        : "cancel_rejected";
   return {
-    statusCode: 409,
-    code: "task_not_created",
-    error: result.reason ?? "TaskFlow task was not created.",
+    statusCode: code === "cancel_pending" ? 202 : code === "persist_failed" ? 503 : 409,
+    code,
+    error:
+      result.reason ??
+      (action === "run_task"
+        ? "TaskFlow task was not created."
+        : "TaskFlow cancellation was rejected."),
   };
-}
-
-function mapCancelStatus(result: { found: boolean; cancelled: boolean; reason?: string }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  if (result.cancelled) {
-    return { statusCode: 200 };
-  }
-  if (!result.found) {
-    return {
-      statusCode: 404,
-      code: "not_found",
-      error: "TaskFlow not found.",
-    };
-  }
-  if (result.reason === "One or more child tasks are still active.") {
-    return {
-      statusCode: 202,
-      code: "cancel_pending",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Flow changed while cancellation was in progress.") {
-    return {
-      statusCode: 409,
-      code: "revision_conflict",
-      error: result.reason,
-    };
-  }
-  if (result.reason?.startsWith("Flow is already ")) {
-    return {
-      statusCode: 409,
-      code: "terminal",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Flow persistence failed.") {
-    return {
-      statusCode: 503,
-      code: "persist_failed",
-      error: result.reason,
-    };
-  }
-  return {
-    statusCode: 409,
-    code: "cancel_rejected",
-    error: result.reason ?? "TaskFlow cancellation was rejected.",
-  };
-}
-
-function describeWebhookOutcome(params: { action: WebhookAction; result: unknown }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  switch (params.action.action) {
-    case "create_flow":
-      return mapCreateFlowStatus(
-        params.result as {
-          created: boolean;
-          code?: "persist_failed";
-        },
-      );
-    case "set_waiting":
-    case "resume_flow":
-    case "finish_flow":
-    case "fail_flow":
-    case "request_cancel":
-      return mapMutationStatus(
-        params.result as {
-          applied: boolean;
-          code?: "not_found" | "not_managed" | "revision_conflict" | "persist_failed";
-        },
-      );
-    case "cancel_flow":
-      return mapCancelStatus(
-        params.result as {
-          found: boolean;
-          cancelled: boolean;
-          reason?: string;
-        },
-      );
-    case "run_task":
-      return mapRunTaskStatus(
-        params.result as {
-          created: boolean;
-          found: boolean;
-          reason?: string;
-        },
-      );
-    default:
-      return { statusCode: 200 };
-  }
 }
 
 async function executeWebhookAction(params: {
   action: WebhookAction;
   target: TaskFlowWebhookTarget;
   cfg: OpenClawConfig;
-}): Promise<unknown> {
+}): Promise<WebhookOutcome> {
   const { action, target } = params;
   switch (action.action) {
     case "create_flow": {
+      const { action: _action, ...input } = action;
       const flow = await target.taskFlow.tryCreateManaged({
-        controllerId: action.controllerId ?? target.defaultControllerId,
-        goal: action.goal,
-        status: action.status,
-        notifyPolicy: action.notifyPolicy,
-        currentStep: action.currentStep ?? undefined,
-        stateJson: action.stateJson,
-        waitJson: action.waitJson,
+        ...input,
+        controllerId: input.controllerId ?? target.defaultControllerId,
+        currentStep: input.currentStep ?? undefined,
       });
       return flow
-        ? { created: true, flow: toFlowView(flow) }
-        : { created: false, code: "persist_failed" };
+        ? { statusCode: 200, result: { created: true, flow: toFlowView(flow) } }
+        : {
+            statusCode: 503,
+            code: "persist_failed",
+            error: "TaskFlow persistence failed.",
+            result: { created: false, code: "persist_failed" },
+          };
     }
     case "get_flow": {
       const flow = await target.taskFlow.get(action.flowId);
-      return { flow: flow ? toFlowView(flow) : null };
+      return { statusCode: 200, result: { flow: flow ? toFlowView(flow) : null } };
     }
     case "list_flows":
-      return { flows: (await target.taskFlow.list()).map(toFlowView) };
+      return { statusCode: 200, result: { flows: (await target.taskFlow.list()).map(toFlowView) } };
     case "find_latest_flow": {
       const flow = await target.taskFlow.findLatest();
-      return { flow: flow ? toFlowView(flow) : null };
+      return { statusCode: 200, result: { flow: flow ? toFlowView(flow) : null } };
     }
     case "resolve_flow": {
       const flow = await target.taskFlow.resolve(action.token);
-      return { flow: flow ? toFlowView(flow) : null };
+      return { statusCode: 200, result: { flow: flow ? toFlowView(flow) : null } };
     }
     case "get_task_summary":
-      return { summary: (await target.taskFlow.getTaskSummary(action.flowId)) ?? null };
+      return {
+        statusCode: 200,
+        result: { summary: (await target.taskFlow.getTaskSummary(action.flowId)) ?? null },
+      };
     case "set_waiting": {
-      const result = await target.taskFlow.setWaiting({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        currentStep: action.currentStep,
-        stateJson: action.stateJson,
-        waitJson: action.waitJson,
-        blockedTaskId: action.blockedTaskId,
-        blockedSummary: action.blockedSummary,
-      });
-      return mapFlowMutationResult(result);
+      const { action: _action, ...input } = action;
+      return mapFlowMutationResult(await target.taskFlow.setWaiting(input));
     }
     case "resume_flow": {
-      const result = await target.taskFlow.resume({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        status: action.status,
-        currentStep: action.currentStep,
-        stateJson: action.stateJson,
-      });
-      return mapFlowMutationResult(result);
+      const { action: _action, ...input } = action;
+      return mapFlowMutationResult(await target.taskFlow.resume(input));
     }
     case "finish_flow": {
-      const result = await target.taskFlow.finish({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        stateJson: action.stateJson,
-      });
-      return mapFlowMutationResult(result);
+      const { action: _action, ...input } = action;
+      return mapFlowMutationResult(await target.taskFlow.finish(input));
     }
     case "fail_flow": {
-      const result = await target.taskFlow.fail({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        stateJson: action.stateJson,
-        blockedTaskId: action.blockedTaskId,
-        blockedSummary: action.blockedSummary,
-      });
-      return mapFlowMutationResult(result);
+      const { action: _action, ...input } = action;
+      return mapFlowMutationResult(await target.taskFlow.fail(input));
     }
     case "request_cancel": {
-      const result = await target.taskFlow.requestCancel({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-      });
-      return mapFlowMutationResult(result);
+      const { action: _action, ...input } = action;
+      return mapFlowMutationResult(await target.taskFlow.requestCancel(input));
     }
     case "cancel_flow": {
       const result = await target.taskFlow.cancel({
         flowId: action.flowId,
         cfg: params.cfg,
       });
-      return {
+      const projected = {
         found: result.found,
         cancelled: result.cancelled,
         ...(result.reason ? { reason: result.reason } : {}),
         ...(result.flow ? { flow: toFlowView(result.flow) } : {}),
         ...(result.tasks ? { tasks: result.tasks.map(toTaskView) } : {}),
       };
+      return {
+        ...(projected.cancelled
+          ? { statusCode: 200 }
+          : mapOperationRejection("cancel_flow", projected)),
+        result: projected,
+      };
     }
     case "run_task": {
-      const result = await target.taskFlow.runTask({
-        flowId: action.flowId,
-        runtime: action.runtime,
-        sourceId: action.sourceId,
-        childSessionKey: action.childSessionKey,
-        parentTaskId: action.parentTaskId,
-        agentId: action.agentId,
-        runId: action.runId,
-        label: action.label,
-        task: action.task,
-        preferMetadata: action.preferMetadata,
-        notifyPolicy: action.notifyPolicy,
-        status: action.status,
-        startedAt: action.startedAt,
-        lastEventAt: action.lastEventAt,
-        progressSummary: action.progressSummary,
-      });
-      if (result.created) {
-        return {
-          created: true,
-          flow: toFlowView(result.flow),
-          task: toTaskView(result.task),
-        };
-      }
+      const { action: _action, ...input } = action;
+      const result = await target.taskFlow.runTask(input);
       return {
-        found: result.found,
-        created: false,
-        reason: result.reason,
-        ...(result.flow ? { flow: toFlowView(result.flow) } : {}),
+        ...(result.created ? { statusCode: 200 } : mapOperationRejection("run_task", result)),
+        result: result.created
+          ? { created: true, flow: toFlowView(result.flow), task: toTaskView(result.task) }
+          : {
+              found: result.found,
+              created: false,
+              reason: result.reason,
+              ...(result.flow ? { flow: toFlowView(result.flow) } : {}),
+            },
       };
     }
   }
@@ -613,14 +403,10 @@ export function createTaskFlowWebhookRequestHandler(params: {
           return true;
         }
 
-        const result = await executeWebhookAction({
+        const { result, ...outcome } = await executeWebhookAction({
           action: parsed.data,
           target,
           cfg: params.cfg,
-        });
-        const outcome = describeWebhookOutcome({
-          action: parsed.data,
-          result,
         });
         writeJson(
           res,

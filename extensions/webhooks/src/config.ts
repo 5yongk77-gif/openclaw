@@ -1,4 +1,3 @@
-// Webhooks helper module supports config behavior.
 import { z } from "zod";
 import { normalizeWebhookPath } from "../runtime-api.js";
 

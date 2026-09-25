@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 const jsonValueSchema = z.json();
-export type JsonValue = z.infer<typeof jsonValueSchema>;
 
 const nullableStringSchema = z.string().trim().min(1).nullable().optional();
 
