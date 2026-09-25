@@ -129,6 +129,10 @@ type PluginCliRegistration = PluginRegistrationOwner & {
 export type PluginHttpRouteRegistration = {
   /** Retired ingress awaiting a lifecycle replacement; responds with Retry-After. */
   handoff?: true;
+  /** Compatibility endpoints retained by live holders or route handoffs. */
+  legacyListeners?: readonly { port: number; host?: string }[];
+  /** Endpoints retained only by a handoff, without a live holder. */
+  legacyListenerHandoffs?: PluginHttpRouteRegistration["legacyListeners"];
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
