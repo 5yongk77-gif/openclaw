@@ -1,5 +1,7 @@
-import { builtinEnvironments } from "vitest/runtime";
+import { createRequire } from "node:module";
 import { installJsdomEnvironmentAdapter } from "../jsdom-compat.mts";
 
-// Run before Vitest initializes its environment, including explicit jsdom pragmas.
+// Package-local Vitest workers can use a different installation than this preload.
+const require = createRequire(process.argv[1]!);
+const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 installJsdomEnvironmentAdapter(builtinEnvironments.jsdom);
