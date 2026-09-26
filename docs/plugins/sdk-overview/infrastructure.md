@@ -323,6 +323,8 @@ Account leases sharing a route can retain separate endpoints. Endpoints retained
 only by a restart handoff return retryable 503 responses; endpoints with live
 holders keep serving requests. A live holder at the same address takes precedence
 over a retained handoff.
+Live registrations sharing an endpoint must declare the same health and timeout
+profile; conflicting registrations are rejected without changing the listener.
 Bind failure warns without disabling the Gateway route. After the operator changes
 the provider callback or reverse proxy to reach the Gateway port, the plugin can
 stop registering the compatibility endpoint.

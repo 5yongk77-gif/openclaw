@@ -337,6 +337,30 @@ export function registerPluginHttpRoute(params: {
         `owned by ${authOverlap.pluginId ?? "unknown-plugin"} (${authOverlap.source ?? "unknown-source"})`,
     );
   }
+  const listener = params.legacyListener;
+  if (listener) {
+    for (const route of routes) {
+      if (params.replaceExisting && canonicalMatches.includes(route)) {
+        continue;
+      }
+      const conflict = route.legacyListeners?.find(
+        (existing) =>
+          existing.port === listener.port &&
+          existing.host === listener.host &&
+          !route.legacyListenerHandoffs?.includes(existing) &&
+          (existing.health?.path !== listener.health?.path ||
+            existing.health?.contentType !== listener.health?.contentType ||
+            existing.timeouts?.headers !== listener.timeouts?.headers ||
+            existing.timeouts?.request !== listener.timeouts?.request ||
+            existing.timeouts?.socket !== listener.timeouts?.socket),
+      );
+      if (conflict) {
+        return rejectRegistration(
+          `plugin: conflicting legacy webhook health or timeout profile at ${listener.host ?? "<unspecified>"}:${listener.port}${suffix}; registrations sharing a port must use the same profile`,
+        );
+      }
+    }
+  }
   const entry: PluginHttpRouteRegistration = {
     path: normalizedPath,
     handler: wrapCurrentPluginInstance(params.handler),

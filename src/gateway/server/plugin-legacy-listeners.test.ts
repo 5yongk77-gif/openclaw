@@ -224,31 +224,73 @@ describe("legacy channel webhook ports", () => {
     },
   );
 
-  it("keeps health metadata and timeout profiles current while shared holders and handoffs retain a port", async () => {
+  it("requires compatible live profiles and replaces a retained handoff profile without reopening its port", async () => {
     const lease = createPluginRuntimeCapabilityLease("profile-owner");
-    withPluginHttpRouteRegistry(
-      registry,
-      () =>
-        register({
-          legacyListener: {
-            ...endpoint(1),
-            health: { path: "/healthz" },
-            timeouts: { headers: 10_000, request: 30_000, socket: 30_000 },
-          },
-        }),
-      lease,
-    );
+    const legacyListener = {
+      ...endpoint(1),
+      health: { path: "/healthz" },
+      timeouts: { headers: 15_000, request: 30_000, socket: 30_000 },
+    };
+    withPluginHttpRouteRegistry(registry, () => register({ legacyListener }), lease);
+    const removeSibling = register({
+      path: "/sibling",
+      legacyListener: {
+        ...endpoint(1),
+        health: { path: "/healthz" },
+        timeouts: { headers: 15_000, request: 30_000, socket: 30_000 },
+      },
+      throwOnFailure: true,
+    });
     await listening();
     const server = httpServers[1]!;
     expect(server).toMatchObject({
-      headersTimeout: 10_000,
+      headersTimeout: 15_000,
       requestTimeout: 30_000,
       timeout: 30_000,
     });
+    expect(registry.httpRoutes).toHaveLength(2);
+    for (const path of ["/webhook", "/sibling"]) {
+      expect(await send(1, path)).toMatchObject({ status: 200, body: "accepted" });
+    }
     expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
 
-    const removeReplacement = register({
+    const log = vi.fn();
+    for (const conflict of [
+      { ...legacyListener, health: { path: "/healthz", contentType: "text/plain" } },
+      { ...legacyListener, health: undefined },
+      { ...legacyListener, timeouts: undefined },
+    ]) {
+      expect(() =>
+        register({ path: "/conflicting", legacyListener: conflict, log, throwOnFailure: true }),
+      ).toThrow("conflicting legacy webhook health or timeout profile");
+    }
+    register({ path: "/conflicting", legacyListener: endpoint(1), log });
+    expect(log).toHaveBeenCalledTimes(4);
+    expect(log).toHaveBeenLastCalledWith(
+      expect.stringContaining("registrations sharing a port must use the same profile"),
+    );
+    await listening();
+    expect(registry.httpRoutes).toHaveLength(2);
+    expect(httpServers.slice(1)).toEqual([server]);
+    expect(server).toMatchObject({
+      headersTimeout: 15_000,
+      requestTimeout: 30_000,
+      timeout: 30_000,
+    });
+    expect(await send(1, "/healthz")).toMatchObject({ status: 200, body: "ok" });
+    expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
+
+    const handoff = createPluginHttpRouteHandoff();
+    cleanups.push(handoff.release);
+    handoff.park(lease);
+    lease.revoke();
+    removeSibling();
+    await listening();
+    expect(await send(1, "/webhook")).toMatchObject({ status: 503 });
+    const removeSuccessor = register({
+      path: "/sibling",
       legacyListener: { ...endpoint(1), health: { path: "/healthz", contentType: "text/plain" } },
+      throwOnFailure: true,
     });
     await listening();
     expect(httpServers.slice(1)).toEqual([server]);
@@ -259,27 +301,18 @@ describe("legacy channel webhook ports", () => {
       keepAliveTimeout: 5_000,
     });
     expect((await send(1, "/healthz")).headers["content-type"]).toBe("text/plain");
-    const removeWithoutHealth = register({ legacyListener: endpoint(1) });
+    expect(await send(1, "/sibling")).toMatchObject({ status: 200, body: "accepted" });
+    expect(await send(1, "/webhook")).toMatchObject({ status: 503 });
+    removeSuccessor();
     await listening();
-    expect(await send(1, "/healthz")).toMatchObject({ status: 404, body: "" });
-    removeWithoutHealth();
-    await listening();
-    expect((await send(1, "/healthz")).headers["content-type"]).toBe("text/plain");
-    removeReplacement();
-    await listening();
+    expect(httpServers.slice(1)).toEqual([server]);
     expect(server).toMatchObject({
-      headersTimeout: 10_000,
+      headersTimeout: 15_000,
       requestTimeout: 30_000,
       timeout: 30_000,
     });
-    expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
-
-    const handoff = createPluginHttpRouteHandoff();
-    cleanups.push(handoff.release);
-    handoff.park(lease);
-    lease.revoke();
-    await listening();
     expect(await send(1, "/healthz")).toMatchObject({ status: 200, body: "ok" });
+    expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
     expect(await send(1, "/webhook")).toMatchObject({ status: 503 });
     const closed = once(server, "close");
     handoff.release();

@@ -40,15 +40,15 @@ export function startPluginLegacyListeners(params: {
     if (stopped) {
       return;
     }
-    const endpoints = new Map(
-      params
-        .getRegistry()
-        .httpRoutes.flatMap((route) =>
-          (route.legacyListeners ?? []).map(
-            (endpoint) => [endpointKey(endpoint), endpoint] as const,
-          ),
-        ),
-    );
+    const endpoints = new Map<string, LegacyEndpoint>();
+    for (const route of params.getRegistry().httpRoutes) {
+      for (const endpoint of route.legacyListeners ?? []) {
+        const key = endpointKey(endpoint);
+        if (!endpoints.has(key) || !route.legacyListenerHandoffs?.includes(endpoint)) {
+          endpoints.set(key, endpoint);
+        }
+      }
+    }
     for (const [key, listener] of listeners) {
       if (!endpoints.has(key)) {
         listeners.delete(key);
