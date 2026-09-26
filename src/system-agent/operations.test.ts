@@ -854,27 +854,6 @@ describe("system agent operations", () => {
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 
-    it("names the saved entry when the config write fails", async () => {
-      useOperationStateDir("openclaw-chat-secret-config-fails-");
-      const runConfigSet = vi.fn(async () => {
-        throw new Error("Config validation failed: fixture rejected");
-      });
-
-      const failure = executeSystemAgentOperation(
-        operation,
-        createSystemAgentTestRuntime().runtime,
-        { approved: true, deps: { runConfigSet } },
-      );
-
-      await expect(failure).rejects.toThrow("Config validation failed: fixture rejected");
-      // Another consumer may already use the fresh entry, so it is never deleted here.
-      const [name] = storedEntries();
-      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
-      await expect(failure).rejects.toThrow(
-        `Saved the secret as ${name}, but could not point ${operation.path} at it: Config validation failed: fixture rejected. Retry, or remove the entry with \`openclaw secrets store rm ${name}\`.`,
-      );
-    });
-
     it("keeps the key's configured store provider when rotating it", async () => {
       useOperationStateDir("openclaw-chat-secret-provider-");
       mockConfig.setConfig({

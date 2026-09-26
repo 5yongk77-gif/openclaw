@@ -1,6 +1,7 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { getAtPath, parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -307,7 +308,11 @@ export async function runConfigSetOperation(params: {
     ctx.deps?.runConfigSet ??
     (async (setOpts: Parameters<NonNullable<SystemAgentCommandDeps["runConfigSet"]>>[0]) => {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
-      await importedRunConfigSet({ ...setOpts, runtime: createNoExitRuntime(ctx.runtime) });
+      await importedRunConfigSet({
+        ...setOpts,
+        runtime: createNoExitRuntime(ctx.runtime),
+        throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
+      });
     });
   const beforePersistentApply = ctx.assertPersistentApply
     ? { beforePersistentApply: ctx.assertPersistentApply }
@@ -369,8 +374,37 @@ export async function runConfigSetOperation(params: {
       ...beforePersistentApply,
     });
   } catch (error) {
+    // The writer can fail after publication and can decline or fail rollback.
+    // Reconcile persisted source, not the possibly stale active runtime snapshot.
+    const postCommit = error instanceof ConfigWritePostCommitError ? error : undefined;
+    let referenceState = `Could not establish whether ${operation.path} references the saved entry.`;
+    try {
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const current = await readConfigFileSnapshot({ observe: false, isolateEnv: true });
+      if (
+        current.path === (postCommit?.configPath ?? snapshot.path) &&
+        current.exists &&
+        current.valid
+      ) {
+        const ref = coerceSecretRef(
+          getAtPath(current.sourceConfig, configPath).value,
+          current.config.secrets?.defaults,
+        );
+        const referencesEntry = ref?.source === "store" && ref.id === storeEntry;
+        referenceState = `At the recovery check, ${operation.path} ${referencesEntry ? "referenced" : "did not reference"} the saved entry.`;
+      }
+    } catch {
+      // An unreadable/invalid config is unknown, never evidence of non-use.
+    }
+    // Even an absent target ref cannot certify non-use by other config/auth
+    // consumers or later writers. Keep the entry and never offer blind cleanup.
     throw new Error(
-      `Saved the secret as ${storeEntry}, but could not point ${operation.path} at it: ${formatErrorMessage(error)}. Retry, or remove the entry with \`openclaw secrets store rm ${storeEntry}\`.`,
+      [
+        `Saved the secret as ${storeEntry}, but ${postCommit ? "config post-write processing" : "the config operation"} failed: ${formatErrorMessage(error)}`,
+        referenceState,
+        "The entry was kept; other config keys or auth profiles may use it. Do not remove it while references are present or uncertain.",
+        "Resolve the config/runtime error and inspect current references before retrying; reuse the saved entry instead of saving the secret again.",
+      ].join(" "),
       { cause: error },
     );
   }
