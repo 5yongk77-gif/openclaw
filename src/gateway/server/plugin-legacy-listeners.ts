@@ -1,12 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server } from "node:http";
 import { runHttpConnectionRequest } from "../../infra/http-request-lifecycle.js";
 import { markPluginHttpLegacyListener } from "../../plugins/http-legacy-listener.js";
 import { onPluginHttpRoutesChanged } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry-types.js";
 
 type LegacyEndpoint = NonNullable<PluginHttpRouteRegistration["legacyListeners"]>[number];
-type LegacyListener = { server: Server; controller: AbortController };
+type LegacyListener = {
+  server: Server;
+  controller: AbortController;
+  endpoint: LegacyEndpoint;
+  defaultTimeouts: NonNullable<LegacyEndpoint["timeouts"]>;
+};
 const endpointKey = ({ host, port }: LegacyEndpoint) => `${host ?? "<unspecified>"}:${port}`;
 
 /** Compatibility ports share Gateway dispatch and the route owner's existing handoff leases. */
@@ -51,45 +56,52 @@ export function startPluginLegacyListeners(params: {
       }
     }
     for (const [key, endpoint] of endpoints) {
-      if (listeners.has(key)) {
+      const existing = listeners.get(key);
+      if (existing) {
+        existing.endpoint = endpoint;
+        const timeouts = endpoint.timeouts ?? existing.defaultTimeouts;
+        existing.server.headersTimeout = timeouts.headers;
+        existing.server.requestTimeout = timeouts.request;
+        existing.server.setTimeout(timeouts.socket);
         continue;
       }
-      const server = createServer({
-        maxHeaderSize: 16 * 1024,
-        headersTimeout: 10_000,
-        requestTimeout: 30_000,
-        keepAliveTimeout: 5_000,
-      });
+      const server = createServer();
       const controller = new AbortController();
-      server.setTimeout(30_000, (socket) => socket.destroy());
-      const forward =
-        (event: "request" | "checkContinue" | "checkExpectation") =>
-        (req: IncomingMessage, res: ServerResponse) => {
-          markPluginHttpLegacyListener(req, endpoint);
-          // Even a path rejection must wait for earlier responses on this connection.
-          if (!params.gatewayServer.emit(event, req, res)) {
-            if (event === "checkContinue") {
-              res.writeContinue();
-              params.gatewayServer.emit("request", req, res);
-            } else if (event === "checkExpectation") {
-              res.writeHead(417).end();
-            }
-          }
-        };
-      server.on("request", forward("request"));
-      server.on("checkContinue", forward("checkContinue"));
-      server.on("checkExpectation", forward("checkExpectation"));
-      for (const event of ["upgrade", "connect"] as const) {
-        server.on(event, (req, socket) => {
+      const listener: LegacyListener = {
+        server,
+        controller,
+        endpoint,
+        defaultTimeouts: {
+          headers: server.headersTimeout,
+          request: server.requestTimeout,
+          socket: server.timeout,
+        },
+      };
+      if (endpoint.timeouts) {
+        server.headersTimeout = endpoint.timeouts.headers;
+        server.requestTimeout = endpoint.timeouts.request;
+        server.setTimeout(endpoint.timeouts.socket);
+      }
+      // Native Node expectations and Upgrade fallback match the shipped private servers.
+      server.on("request", (req, res) => {
+        const endpoint = listener.endpoint;
+        if (endpoint.health && req.url === endpoint.health.path) {
           void runHttpConnectionRequest(
             req,
             async () => {
-              socket.destroy();
+              if (endpoint.health?.contentType) {
+                res.setHeader("Content-Type", endpoint.health.contentType);
+              }
+              res.writeHead(200);
+              res.end("ok");
             },
-            "upgrade",
-          );
-        });
-      }
+            res,
+          ).catch((error: unknown) => res.destroy(error instanceof Error ? error : undefined));
+          return;
+        }
+        markPluginHttpLegacyListener(req, endpoint);
+        params.gatewayServer.emit("request", req, res);
+      });
       server.on("error", (error) => {
         const listener = listeners.get(key);
         if (listener?.server === server) {
@@ -112,7 +124,7 @@ export function startPluginLegacyListeners(params: {
           }
         });
       }
-      listeners.set(key, { server, controller });
+      listeners.set(key, listener);
       params.httpServers.push(server);
       try {
         server.listen({

@@ -61,10 +61,7 @@ import {
   type GatewayIngressTransport,
   type GatewayUnattributableProxyReporter,
 } from "./ingress-attribution.js";
-import {
-  normalizePluginNodeCapabilityScopedUrl,
-  type NormalizedPluginNodeCapabilityUrl,
-} from "./plugin-node-capability.js";
+import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
@@ -221,6 +218,19 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) {
+    // Legacy ports retain their plugin's raw URLs and wire responses, not Gateway endpoints.
+    if (getWebhookLegacyListener(req)) {
+      try {
+        if (!(await handlePluginRequest?.(req, res)) && !res.writableEnded && !res.destroyed) {
+          res.writeHead(404);
+          res.end();
+        }
+      } catch (error) {
+        console.error("[gateway-http] legacy plugin request failed:", error);
+        res.destroy(error instanceof Error ? error : undefined);
+      }
+      return;
+    }
     // Read only the published snapshot: even liveness and rejection responses need
     // current headers without depending on config IO or auth resolution.
     setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);
@@ -253,8 +263,7 @@ export function createGatewayHttpServer(opts: {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return;
       }
-      const legacyPluginRequest = getWebhookLegacyListener(req) !== undefined;
-      if (!legacyPluginRequest && classifyGatewayProbePath(requestPath) === "live") {
+      if (classifyGatewayProbePath(requestPath) === "live") {
         await handleGatewayProbeRequest(
           req,
           res,
@@ -292,10 +301,7 @@ export function createGatewayHttpServer(opts: {
         tailscaleWhois: (ip) =>
           readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
-      // Retired channel ports keep the literal callback URL registered by their plugin.
-      const scopedNodeCapability: NormalizedPluginNodeCapabilityUrl = legacyPluginRequest
-        ? { pathname: requestPath, scopedPath: false, malformedScopedPath: false }
-        : normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
+      const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return;
@@ -307,28 +313,23 @@ export function createGatewayHttpServer(opts: {
       }
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
-      const nodeCapability = legacyPluginRequest
-        ? undefined
-        : resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
       if (ingressAttribution.kind === "unattributable-proxy") {
         opts.reportUnattributableProxy?.(ingressAttribution);
         if (
+          !nodeCapability &&
           handlePluginRequest &&
-          (legacyPluginRequest ||
-            (!nodeCapability && opts.isPluginAuthenticatedRoute?.(pluginPathContext))) &&
+          opts.isPluginAuthenticatedRoute?.(pluginPathContext) &&
           (await handlePluginRequest(req, res, pluginPathContext, {
             gatewayRequestClientIp: ingressAttribution.remoteAddress,
           }))
         ) {
           return;
         }
-        if (legacyPluginRequest) {
-          respondNotFound(res);
-        } else {
-          sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
-        }
+        sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
         return;
       }
+      const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
@@ -624,9 +625,6 @@ export function createGatewayHttpServer(opts: {
       );
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
-      if (legacyPluginRequest) {
-        requestStages.length = 0;
-      }
       if (handlePluginRequest) {
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
@@ -635,7 +633,6 @@ export function createGatewayHttpServer(opts: {
         requestStages.push(
           async () => {
             if (
-              legacyPluginRequest ||
               !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
                 pluginPathContext,
               ) ||
@@ -672,16 +669,11 @@ export function createGatewayHttpServer(opts: {
               gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
-              gatewayRequestClientIp: ingressAttribution.clientIp,
+              gatewayRequestClientIp: requestClientIp,
             });
           },
         );
       }
-
-      addRequestStage(legacyPluginRequest, () => {
-        respondNotFound(res);
-        return true;
-      });
 
       addRequestStage(focusDocument, handleStandaloneControlUiRequest);
 

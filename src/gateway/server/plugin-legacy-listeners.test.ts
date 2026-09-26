@@ -1,5 +1,11 @@
 import { once } from "node:events";
-import { request, type Server } from "node:http";
+import {
+  request,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getWebhookLegacyListener } from "../../plugin-sdk/webhook-ingress.js";
@@ -97,7 +103,11 @@ describe("legacy channel webhook ports", () => {
       source: "webhook",
       auth: "plugin",
       reuseExistingSameOwner: true,
-      handler: (_req, res) => {
+      handler: (req, res) => {
+        if (req.url !== (params.path ?? "/webhook")) {
+          res.writeHead(404).end();
+          return;
+        }
         res.end("accepted");
       },
       ...params,
@@ -117,11 +127,216 @@ describe("legacy channel webhook ports", () => {
     );
   };
 
+  const send = (
+    offset: number,
+    path: string,
+    options: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  ) =>
+    new Promise<{
+      status: number | undefined;
+      headers: IncomingHttpHeaders;
+      body: string;
+      continues: number;
+    }>((resolve, reject) => {
+      let continues = 0;
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port: claim.port + offset,
+          path,
+          method: options.method ?? "GET",
+          headers: { Connection: "close", ...options.headers },
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          res.on("error", reject);
+          res.on("end", () => {
+            req.destroy();
+            resolve({ status: res.statusCode, headers: res.headers, body, continues });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.on("continue", () => {
+        continues += 1;
+        req.end(options.body);
+      });
+      if (options.headers?.Expect) {
+        req.flushHeaders();
+      } else {
+        req.end(options.body);
+      }
+    });
+
+  it.each([undefined, "text/plain"])(
+    "preserves the legacy health response with Content-Type %s without changing Gateway probes",
+    async (contentType) => {
+      const handler = vi.fn((req: IncomingMessage, res: ServerResponse) => {
+        expect(getWebhookLegacyListener(req)).toEqual(endpoint(1));
+        res.writeHead(404).end();
+      });
+      register({
+        legacyListener: { ...endpoint(1), health: { path: "/healthz", contentType } },
+        handler,
+      });
+      register({ path: "/no-health", legacyListener: endpoint(2) });
+      await listening();
+
+      for (const method of ["GET", "HEAD", "OPTIONS", "POST"]) {
+        const response = await send(1, "/healthz", { method });
+        expect(response.status).toBe(200);
+        expect(response.body).toBe(method === "HEAD" ? "" : "ok");
+        expect(response.headers).toEqual({
+          date: expect.any(String),
+          connection: "close",
+          ...(contentType ? { "content-type": contentType } : {}),
+          ...(method === "HEAD" ? {} : { "transfer-encoding": "chunked" }),
+        });
+      }
+      expect(handler).not.toHaveBeenCalled();
+      for (const path of ["/healthz?probe=1", "/healthz/", "/HEALTHZ", "/%68ealthz"]) {
+        const response = await send(1, path);
+        expect(response.status, path).toBe(404);
+        expect(response.body, path).toBe("");
+        expect(response.headers["content-type"], path).toBeUndefined();
+      }
+      expect(handler).toHaveBeenCalledTimes(4);
+      expect(await send(2, "/healthz")).toMatchObject({ status: 404, body: "" });
+
+      const gateway = await send(0, "/healthz");
+      expect(gateway.status).toBe(200);
+      expect(JSON.parse(gateway.body)).toEqual({ ok: true, status: "live" });
+      expect(gateway.headers).toMatchObject({
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+      });
+      expect(await send(0, "/healthz", { method: "OPTIONS" })).toMatchObject({
+        status: 405,
+        body: "Method Not Allowed",
+        headers: { allow: "GET, HEAD" },
+      });
+    },
+  );
+
+  it("keeps health metadata and timeout profiles current while shared holders and handoffs retain a port", async () => {
+    const lease = createPluginRuntimeCapabilityLease("profile-owner");
+    withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        register({
+          legacyListener: {
+            ...endpoint(1),
+            health: { path: "/healthz" },
+            timeouts: { headers: 10_000, request: 30_000, socket: 30_000 },
+          },
+        }),
+      lease,
+    );
+    await listening();
+    const server = httpServers[1]!;
+    expect(server).toMatchObject({
+      headersTimeout: 10_000,
+      requestTimeout: 30_000,
+      timeout: 30_000,
+    });
+    expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
+
+    const removeReplacement = register({
+      legacyListener: { ...endpoint(1), health: { path: "/healthz", contentType: "text/plain" } },
+    });
+    await listening();
+    expect(httpServers.slice(1)).toEqual([server]);
+    expect(server).toMatchObject({
+      headersTimeout: 60_000,
+      requestTimeout: 300_000,
+      timeout: 0,
+      keepAliveTimeout: 5_000,
+    });
+    expect((await send(1, "/healthz")).headers["content-type"]).toBe("text/plain");
+    const removeWithoutHealth = register({ legacyListener: endpoint(1) });
+    await listening();
+    expect(await send(1, "/healthz")).toMatchObject({ status: 404, body: "" });
+    removeWithoutHealth();
+    await listening();
+    expect((await send(1, "/healthz")).headers["content-type"]).toBe("text/plain");
+    removeReplacement();
+    await listening();
+    expect(server).toMatchObject({
+      headersTimeout: 10_000,
+      requestTimeout: 30_000,
+      timeout: 30_000,
+    });
+    expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
+
+    const handoff = createPluginHttpRouteHandoff();
+    cleanups.push(handoff.release);
+    handoff.park(lease);
+    lease.revoke();
+    await listening();
+    expect(await send(1, "/healthz")).toMatchObject({ status: 200, body: "ok" });
+    expect(await send(1, "/webhook")).toMatchObject({ status: 503 });
+    const closed = once(server, "close");
+    handoff.release();
+    await closed;
+    expect(httpServers).toEqual([gatewayServer]);
+  });
+
+  it("delivers absolute-form callback targets unchanged to their legacy handler", async () => {
+    const path = "http://callbacks.example/webhook?tenant=one";
+    register({
+      path,
+      legacyListener: endpoint(1),
+      handler: (req, res) => {
+        if (req.url !== path) {
+          res.writeHead(404).end();
+          return;
+        }
+        res.end("accepted");
+      },
+    });
+    await listening();
+    expect(await send(1, path, { method: "POST" })).toMatchObject({
+      status: 200,
+      body: "accepted",
+    });
+    expect(await send(1, "/webhook?tenant=one", { method: "POST" })).toMatchObject({
+      status: 404,
+      body: "",
+    });
+    expect(await send(1, "http://[", { method: "POST" })).toMatchObject({ status: 404, body: "" });
+  });
+
+  it("preserves legacy socket closure for an escaped handler failure and Gateway error responses", async () => {
+    register({
+      legacyListener: endpoint(1),
+      handler: () => {
+        throw new Error("synthetic callback failure");
+      },
+    });
+    await listening();
+    await expect(send(1, "/webhook")).rejects.toMatchObject({ code: "ECONNRESET" });
+    expect(await send(0, "/webhook")).toMatchObject({
+      status: 500,
+      body: "Internal Server Error",
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  });
+
   it("preserves raw bytes, peer identity, runtime scope, and Gateway admission without exposing other endpoints", async () => {
     const body = '{ "event": "synthetic", "spacing":  true }';
     register({
       legacyListener: endpoint(1),
       handler: async (req, res) => {
+        if (req.url !== "/webhook") {
+          res.writeHead(404).end();
+          return;
+        }
         if (req.headers["x-webhook-secret"] !== "synthetic-secret") {
           res.writeHead(401).end();
           return;
@@ -216,7 +431,10 @@ describe("legacy channel webhook ports", () => {
         path,
         legacyListener: endpoint(1),
         handler: (req, res) => {
-          expect(req.url).toBe(path);
+          if (req.url !== path) {
+            res.writeHead(404).end();
+            return;
+          }
           if (req.headers["x-webhook-secret"] !== "synthetic-secret") {
             res.writeHead(401).end();
             return;
@@ -344,77 +562,46 @@ describe("legacy channel webhook ports", () => {
     expect(httpServers).toEqual([gatewayServer]);
   });
 
-  it.each([true, false])(
-    "settles real HTTP expectations (Gateway event handlers: %s)",
-    async (gatewayEvents) => {
-      const body = "synthetic webhook body";
-      let handled = 0;
-      register({
-        legacyListener: endpoint(1),
-        handler: async (req, res) => {
-          expect(getWebhookLegacyListener(req)).toEqual(endpoint(1));
-          expect(await readRequestBodyWithLimit(req, { maxBytes: 1024 })).toBe(body);
-          handled += 1;
-          res.end("accepted");
-        },
+  it("preserves native expectations, ordinary Upgrade requests, and CONNECT closure", async () => {
+    const body = "synthetic webhook body";
+    const handler = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      expect(getWebhookLegacyListener(req)).toEqual(endpoint(1));
+      expect(await readRequestBodyWithLimit(req, { maxBytes: 1024 })).toBe(body);
+      res.end("accepted");
+    });
+    register({ legacyListener: { ...endpoint(1), health: { path: "/healthz" } }, handler });
+    await listening();
+    for (const path of ["/webhook", "/healthz"]) {
+      expect(
+        await send(1, path, {
+          method: "POST",
+          body,
+          headers: { Expect: "100-continue", "Content-Length": String(Buffer.byteLength(body)) },
+        }),
+      ).toMatchObject({ status: 200, body: path === "/healthz" ? "ok" : "accepted", continues: 1 });
+      const rejected = await send(1, path, {
+        method: "POST",
+        headers: { Expect: "unsupported-expectation" },
       });
-      await listening();
-      const eventListeners = (["checkContinue", "checkExpectation"] as const).map((event) => ({
-        event,
-        listeners: gatewayServer.listeners(event),
-      }));
-      if (!gatewayEvents) {
-        for (const { event } of eventListeners) {
-          gatewayServer.removeAllListeners(event);
-        }
-      }
-      const sendExpectation = (expectation: string) =>
-        new Promise<{ status: number | undefined; continues: number }>((resolve, reject) => {
-          let continues = 0;
-          const req = request(
-            url(1),
-            {
-              method: "POST",
-              headers: {
-                Expect: expectation,
-                "Content-Length": Buffer.byteLength(body),
-                Connection: "close",
-              },
-            },
-            (res) => {
-              res.on("error", reject);
-              res.on("end", () => {
-                req.destroy();
-                resolve({ status: res.statusCode, continues });
-              });
-              res.resume();
-            },
-          );
-          req.on("error", reject);
-          req.on("continue", () => {
-            continues += 1;
-            req.end(body);
-          });
-          req.flushHeaders();
-        });
-      try {
-        expect(await sendExpectation("100-continue")).toEqual({ status: 200, continues: 1 });
-        expect(await sendExpectation("unsupported-expectation")).toEqual({
-          status: 417,
-          continues: 0,
-        });
-        expect(handled).toBe(1);
-      } finally {
-        if (!gatewayEvents) {
-          for (const { event, listeners } of eventListeners) {
-            for (const listener of listeners) {
-              gatewayServer.on(event, listener);
-            }
-          }
-        }
-      }
-    },
-  );
+      expect(rejected).toMatchObject({ status: 417, body: "", continues: 0 });
+      expect(rejected.headers).toEqual({
+        date: expect.any(String),
+        connection: "close",
+        "transfer-encoding": "chunked",
+      });
+      expect(
+        await send(1, path, {
+          method: "POST",
+          body,
+          headers: { Connection: "Upgrade", Upgrade: "websocket" },
+        }),
+      ).toMatchObject({ status: 200, body: path === "/healthz" ? "ok" : "accepted" });
+    }
+    await expect(send(1, "/healthz", { method: "CONNECT" })).rejects.toMatchObject({
+      code: "ECONNRESET",
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 
   it("reports an occupied port and retries it after the conflicting route is removed", async () => {
     const removeBlocker = register({

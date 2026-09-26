@@ -10,7 +10,13 @@ const forwardedRequests = resolveGlobalSingleton(
 
 /** Host-owned attribution; forwarded headers never select a legacy account endpoint. */
 export function markPluginHttpLegacyListener(req: IncomingMessage, endpoint: LegacyEndpoint): void {
-  forwardedRequests.set(req, Object.freeze({ ...endpoint }));
+  forwardedRequests.set(
+    req,
+    Object.freeze({
+      port: endpoint.port,
+      ...(endpoint.host !== undefined ? { host: endpoint.host } : {}),
+    }),
+  );
 }
 
 /** Configured endpoint accepting this request, or undefined on the ordinary Gateway listener. */

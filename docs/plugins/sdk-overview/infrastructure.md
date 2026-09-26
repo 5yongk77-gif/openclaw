@@ -295,10 +295,10 @@ admission, request scope, and route lease handoff; the channel owns its signatur
 verification and bounded body read.
 
 For a shipped channel listener, registration can include
-`legacyListener: { port, host? }`. The Gateway forwards only requests for that
-registration's paths through the same HTTP dispatch, preserving the original
-socket and body. It leaves the callback URL intact, including paths that resemble
-Gateway node-capability URLs. It never exposes core HTTP endpoints on the compatibility port.
+`legacyListener: { port, host? }`. The Gateway forwards requests on that endpoint
+through the same plugin dispatch, preserving the original socket, URL, body,
+and response headers. The handler owns path and method rejection, including
+unknown paths. Core HTTP endpoints are never exposed on the compatibility port.
 Legacy listeners require `auth: "plugin"`: the channel continues authenticating
 its old callback path, including paths under `/api/channels`. The Gateway port
 keeps its protected-path authentication policy. This exception applies only to
@@ -309,6 +309,15 @@ endpoint, or `undefined` for an ordinary Gateway request; headers cannot set it.
 Filter account targets by this endpoint before signature resolution when old ports
 distinguished accounts sharing a path and secret. Ordinary Gateway requests still
 need an unambiguous account path or authentication identity.
+
+The optional registration metadata `health: { path, contentType? }` preserves a
+shipped exact raw health target: `200 ok` for ordinary HTTP methods, with Node's
+HEAD behavior and only the optional Content-Type. It applies only on the legacy
+port, including during route handoff, and does not expose Gateway probe details.
+Legacy ports retain native Node expectation handling, Upgrade fallback, header
+limits and timeout defaults. A shipped timeout profile can be preserved with
+`timeouts: { headers, request, socket }` in milliseconds. These are plugin
+registration contracts, not new operator configuration.
 
 Account leases sharing a route can retain separate endpoints. Endpoints retained
 only by a restart handoff return retryable 503 responses; endpoints with live
