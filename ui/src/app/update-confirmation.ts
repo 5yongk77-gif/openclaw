@@ -24,7 +24,7 @@ export type UpdateProgress = {
 };
 
 // Keep the lazy confirmation entry independent of the application context.
-type UpdateProgressSources = {
+export type UpdateProgressSources = {
   gateway: {
     snapshot: { phase: string };
     subscribe: (listener: () => void) => () => void;
@@ -42,32 +42,13 @@ type UpdateProgressSources = {
   };
 };
 
-export function createUpdateProgressWatcher(
-  context: UpdateProgressSources,
-): (listener: (progress: UpdateProgress) => void) => () => void {
-  return (listener) => {
-    const emit = () => {
-      const update = context.overlays.snapshot;
-      const banner = update.updateStatusBanner;
-      listener({
-        externalSupervisorGuidance: update.externalSupervisorGuidance,
-        run: update.updateRun,
-        busy: update.updateRunning || update.updateReconciliationPending,
-        connected: context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
-        readError:
-          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
-      });
-    };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
-    emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
-  };
-}
+/** The dialog supplies its watcher factory after loading the update runtime. */
+export type UpdateProgressWatcher = (
+  listener: (progress: UpdateProgress) => void,
+  createWatcher: (
+    context: UpdateProgressSources,
+  ) => (listener: (progress: UpdateProgress) => void) => () => void,
+) => () => void;
 
 export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
@@ -88,7 +69,7 @@ export type ConfirmAndStartUpdateParams = {
    * A surface that cannot supply one closes on confirm instead of holding a
    * dialog it can never update; the ambient surfaces narrate from there.
    */
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  watchUpdateProgress?: UpdateProgressWatcher;
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {

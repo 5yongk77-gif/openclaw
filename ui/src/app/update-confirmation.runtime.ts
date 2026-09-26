@@ -15,11 +15,12 @@ import { renderExternalSupervisorGuidance } from "../components/external-supervi
 import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher } from "./update-progress-watcher.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
 
 registerUpdateActionsEnglish();
@@ -139,7 +140,7 @@ export async function confirmAndStartUpdateRuntime(
           return;
         }
         listener(progress);
-      });
+      }, createUpdateProgressWatcher);
       // Subscribe may synchronously retire an existing row before returning its disposer.
       if (settled) {
         stop();

@@ -8,7 +8,8 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
-import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher } from "./update-progress-watcher.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
