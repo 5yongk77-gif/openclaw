@@ -47,8 +47,8 @@ import {
 } from "./service-runtime.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
 import type {
-  GatewayServiceCommandConfig,
   GatewayServiceCommandInspection,
+  GatewayServiceCommandReader,
   GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
@@ -118,10 +118,7 @@ export type GatewayService = GatewayServiceLoadStateReader & {
       systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
     },
   ) => ReturnType<typeof readSystemdDefinitionMutationCapability>;
-  readCommand: (
-    env: GatewayServiceEnv,
-    opts?: GatewayServiceReadOptions,
-  ) => Promise<GatewayServiceCommandConfig | null>;
+  readCommand: GatewayServiceCommandReader;
   readRuntime: (
     env: GatewayServiceEnv,
     opts?: GatewayServiceReadOptions,

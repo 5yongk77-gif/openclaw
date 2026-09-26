@@ -6,12 +6,11 @@ import {
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import type { GatewayServiceCommandReader, GatewayServiceEnv } from "./service-types.js";
 import {
   getGatewayServiceUpdateNativeCommand,
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
-import type { GatewayService } from "./service.js";
 
 export function guardGatewayServiceMutation<
   TArgs extends {
@@ -24,7 +23,7 @@ export function guardGatewayServiceMutation<
   action: string,
   supervisorAction: SupervisorAction,
   mutate: (args: TArgs) => Promise<TResult>,
-  readCommand?: GatewayService["readCommand"],
+  readCommand?: GatewayServiceCommandReader,
   readRuntimePinRevision?: (env: GatewayServiceEnv) => string,
 ): (args: TArgs) => Promise<TResult> {
   return async (args) => {

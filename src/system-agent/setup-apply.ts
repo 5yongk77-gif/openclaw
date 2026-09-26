@@ -25,7 +25,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
+import type { GatewayServiceSetupOutcome } from "../wizard/setup.gateway-recovery.js";
 import {
   assertSetupTarget,
   projectInferenceRoute,

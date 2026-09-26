@@ -5,7 +5,14 @@ import {
   resolveExternalSupervisorGuidance,
 } from "../infra/gateway-supervision.js";
 import { t } from "./i18n/index.js";
-import type { GatewayServiceSetupOutcome } from "./setup.finalize.js";
+
+export type GatewayServiceSetupOutcome =
+  | {
+      status: "ready";
+      action: "installed" | "started" | "reused" | "restarted" | "restart-scheduled";
+    }
+  | { status: "skipped"; reason: "explicit" | "systemd-unavailable" | "external" }
+  | { status: "failed"; error: string };
 
 export function buildGatewayRecoveryProjection(params: {
   gateway: GatewayServiceSetupOutcome;

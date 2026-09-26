@@ -112,6 +112,11 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
+export type GatewayServiceCommandReader = (
+  env: GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
+) => Promise<GatewayServiceCommandConfig | null>;
+
 export type GatewayServiceLoadStateReader = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
 };
