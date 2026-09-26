@@ -1,4 +1,3 @@
-// Firecrawl helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
@@ -10,40 +9,25 @@ const DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS = 60;
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const FIRECRAWL_API_KEY_ENV_VAR = "FIRECRAWL_API_KEY";
 
-type FirecrawlSearchConfig =
-  | {
-      apiKey?: unknown;
-      baseUrl?: string;
-    }
-  | undefined;
+type FirecrawlSearchConfig = {
+  apiKey?: unknown;
+  baseUrl?: string;
+};
+
+type FirecrawlFetchConfig = FirecrawlSearchConfig & {
+  onlyMainContent?: boolean;
+  maxAgeMs?: number;
+  timeoutSeconds?: number;
+};
 
 type PluginEntryConfig =
   | {
-      webSearch?: {
-        apiKey?: unknown;
-        baseUrl?: string;
-      };
-      webFetch?: {
-        apiKey?: unknown;
-        baseUrl?: string;
-        onlyMainContent?: boolean;
-        maxAgeMs?: number;
-        timeoutSeconds?: number;
-      };
+      webSearch?: FirecrawlSearchConfig;
+      webFetch?: FirecrawlFetchConfig;
     }
   | undefined;
 
-type FirecrawlFetchConfig =
-  | {
-      apiKey?: unknown;
-      baseUrl?: string;
-      onlyMainContent?: boolean;
-      maxAgeMs?: number;
-      timeoutSeconds?: number;
-    }
-  | undefined;
-
-function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
+function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig | undefined {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const pluginWebSearch = pluginConfig?.webSearch;
   if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
@@ -52,7 +36,7 @@ function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConf
   return undefined;
 }
 
-function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
+function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig | undefined {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const pluginWebFetch = pluginConfig?.webFetch;
   if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {

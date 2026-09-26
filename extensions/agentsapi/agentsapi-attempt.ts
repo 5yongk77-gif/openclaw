@@ -36,7 +36,7 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
-import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
@@ -134,8 +134,8 @@ export async function runAgentsApiAttempt(
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
-  let reply: ReturnType<typeof createAgentsApiMessageProjection>["reply"] | undefined;
-  let projection: ReturnType<typeof createAgentsApiMessageProjection> | undefined;
+  let reply: AgentsApiMessageProjection["reply"] | undefined;
+  let projection: AgentsApiMessageProjection | undefined;
   let usageRecorded = false;
   let projectionClosed = false;
   const projectionSettlement = new AgentHarnessProjectionSettlement(
@@ -264,7 +264,7 @@ export async function runAgentsApiAttempt(
     if (!creatingSession && inputs.files.length) {
       await uploadInputs(client, remoteSessionId, inputs.files, assertCurrent, controller.signal);
     }
-    projection = createAgentsApiMessageProjection(
+    projection = new AgentsApiMessageProjection(
       projectionSettlement.params,
       remoteSessionId,
       async (event) => {

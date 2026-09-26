@@ -4,6 +4,8 @@ import OpenAI from "openai";
 import type {
   AgentReasoningParam,
   AgentSessionEvent,
+  AgentSessionInputParam,
+  AgentToolParam,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
@@ -128,13 +130,6 @@ const eventSchema = z.looseObject({
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
-export type AgentsApiFunctionDeclaration = {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  defer_loading?: boolean;
-};
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
@@ -188,7 +183,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
-      functions?: AgentsApiFunctionDeclaration[];
+      functions?: AgentToolParam.AgentToolConfigParamFunction[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
     },
@@ -279,24 +274,18 @@ export class AgentsApiClient {
     result: AgentsApiFunctionResult,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvent(
       sessionId,
       {
-        events: [
-          {
-            type: "agent.session.input.tool_result",
-            turn_id: call.turn_id,
-            call_id: call.call_id,
-            ...(result.success
-              ? { success: true, output: result.output }
-              : { success: false, error: result.error }),
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
+        type: "agent.session.input.tool_result",
+        turn_id: call.turn_id,
+        call_id: call.call_id,
+        ...(result.success
+          ? { success: true, output: result.output }
+          : { success: false, error: result.error }),
       },
-      { signal },
+      signal,
     );
-    this.assertCurrent();
   }
 
   async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<Turn> {
@@ -459,32 +448,18 @@ export class AgentsApiClient {
   }
 
   async message(sessionId: string, text: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvent(
       sessionId,
       {
-        events: [
-          {
-            type: "agent.session.input.message",
-            input: [{ role: "user", content: [{ type: "input_text", text }] }],
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
+        type: "agent.session.input.message",
+        input: [{ role: "user", content: [{ type: "input_text", text }] }],
       },
-      { signal },
+      signal,
     );
-    this.assertCurrent();
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
-      sessionId,
-      {
-        events: [{ type: "agent.session.input.cancel" }],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
-    );
-    this.assertCurrent();
+    await this.submitEvent(sessionId, { type: "agent.session.input.cancel" }, signal);
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
       const session = await this.session(sessionId, signal);
@@ -493,6 +468,19 @@ export class AgentsApiClient {
       }
       await delay(500, undefined, { signal });
     }
+  }
+
+  private async submitEvent(
+    sessionId: string,
+    event: AgentSessionInputParam,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.sessions.events.create(
+      sessionId,
+      { events: [event], "Idempotency-Key": randomUUID() },
+      { signal },
+    );
+    this.assertCurrent();
   }
 
   async items(
