@@ -247,7 +247,7 @@ export async function runAgentsApiAttempt(
     const creatingSession = !remoteSessionId;
     if (!remoteSessionId) {
       // The remote session owns this snapshot; continuation never reloads it.
-      const instructions = await buildAgentsApiInstructions(params, surface.declarations);
+      const instructions = await buildAgentsApiInstructions(params, surface.declarations, environment);
       assertCurrent();
       remoteSessionId = await client.create(controller.signal, instructions, params.model.id, {
         functions: surface.declarations,
