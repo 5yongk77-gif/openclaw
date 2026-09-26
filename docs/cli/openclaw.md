@@ -172,17 +172,12 @@ creates a new entry named after the config key plus a random suffix (for example
 `GATEWAY_REMOTE_TOKEN_3F9A0C1B7D2E4A68`), so it can never take over a name that
 another config key, an auth profile, or a stale reference to a removed entry
 still uses. OpenClaw never overwrites or deletes an existing entry: replacing a
-key leaves its previous entry in the store. If the config operation fails after
-the key was saved, the error names the saved entry and checks the current config.
-It reports whether the requested key referenced that entry at the recovery check,
-or whether the reference state could not be established. A post-write failure
-can leave the reference saved even when runtime activation failed. The entry is
-kept in every case: another config key or auth profile may already use it, and
-references can change concurrently. Resolve the config/runtime error and inspect
-current references before retrying with the saved entry; do not save the secret
-again or remove an entry whose use is uncertain. For deliberate cleanup, first
-remove or replace all consumers and ensure no concurrent writer can adopt the
-entry, then use `openclaw secrets store rm <NAME>`. For environment storage, use
+key leaves its previous entry in the store. If the config write fails after the
+key was saved, the error names the saved entry and says whether the config key
+points at it. The entry is kept either way, since another config key or auth
+profile may already use it: fix the error and reuse that entry rather than
+pasting the key again, and remove an entry with `openclaw secrets store rm <NAME>`
+only once nothing uses it. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
