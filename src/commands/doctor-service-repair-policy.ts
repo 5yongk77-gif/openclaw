@@ -111,7 +111,7 @@ export function formatServiceRepairDeferredNote(
   }
   const guidance = resolveExternalSupervisorGuidance("repair", env);
   return guidance
-    ? `${EXTERNAL_SERVICE_REPAIR_NOTE} ${formatExternalSupervisorActionRequired("repair the gateway service", guidance)}`
+    ? `${EXTERNAL_SERVICE_REPAIR_NOTE} ${formatExternalSupervisorActionRequired("repair the gateway service", guidance, env)}`
     : EXTERNAL_SERVICE_REPAIR_NOTE;
 }
 

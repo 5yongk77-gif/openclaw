@@ -21,6 +21,8 @@ describe("gateway supervision", () => {
     { value: "auto", expected: "auto" },
     { value: "invalid", expected: "auto" },
     { value: " EXTERNAL ", expected: "external" },
+    { value: "docker", expected: "external" },
+    { value: " CLAWCTL ", expected: "external" },
   ])("resolves $value as $expected", ({ value, expected }) => {
     const env = { [GATEWAY_SUPERVISOR_MODE_ENV]: value };
 
@@ -167,24 +169,22 @@ describe("gateway supervision", () => {
         assertGatewayServiceMutationAllowed(
           "start the gateway",
           {
-            OPENCLAW_SUPERVISOR_MODE: "external",
-            OPENCLAW_SUPERVISOR_TYPE: type,
+            OPENCLAW_SUPERVISOR_MODE: type,
           },
           "start",
         ),
       ).toThrow(
-        `OpenClaw gateway lifecycle is managed by ${name} (OPENCLAW_SUPERVISOR_MODE=external).\nStart (${location}): ${command}`,
+        `OpenClaw gateway lifecycle is managed by ${name} (OPENCLAW_SUPERVISOR_MODE=${type.trim().toLowerCase()}).\nStart (${location}): ${command}`,
       );
     },
   );
 
-  it.each([undefined, "", "auto"])(
-    "does not activate external ownership from a type with mode %s",
+  it.each([undefined, "", "auto", "unknown", "docker; echo unexpected"])(
+    "keeps unrecognized mode %s outside external supervision",
     (mode) => {
       const env = {
         HOME: os.userInfo().homedir,
         OPENCLAW_SUPERVISOR_MODE: mode,
-        OPENCLAW_SUPERVISOR_TYPE: "docker",
       };
       expect(resolveExternalSupervisorGuidance("start", env)).toBeUndefined();
       expect(() =>
@@ -193,26 +193,16 @@ describe("gateway supervision", () => {
     },
   );
 
-  it.each([undefined, "", "unknown", "docker; echo unexpected"])(
-    "retains generic refusals for type %s",
-    (type) => {
-      expect(() =>
-        assertGatewayServiceMutationAllowed(
-          "start the gateway",
-          {
-            OPENCLAW_SUPERVISOR_MODE: "external",
-            OPENCLAW_SUPERVISOR_TYPE: type,
-          },
-          "start",
-        ),
-      ).toThrow(
-        "OpenClaw gateway lifecycle is managed by an external supervisor (OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the gateway.",
-      );
-    },
-  );
+  it("retains generic instructions for external mode", () => {
+    const env = { OPENCLAW_SUPERVISOR_MODE: "external" };
+    expect(resolveExternalSupervisorGuidance("start", env)).toBeUndefined();
+    expect(() => assertGatewayServiceMutationAllowed("start the gateway", env, "start")).toThrow(
+      "OpenClaw gateway lifecycle is managed by an external supervisor (OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the gateway.",
+    );
+  });
 
   it("uses the matching Docker repair action and keeps unsupported actions generic", () => {
-    const env = { OPENCLAW_SUPERVISOR_MODE: "external", OPENCLAW_SUPERVISOR_TYPE: "docker" };
+    const env = { OPENCLAW_SUPERVISOR_MODE: "docker" };
     expect(() =>
       assertGatewayServiceMutationAllowed("repair the gateway service", env, "repair"),
     ).toThrow("Repair (Docker host): docker compose up -d --force-recreate openclaw-gateway");
@@ -222,19 +212,19 @@ describe("gateway supervision", () => {
   });
 
   it("shows the Docker update workflow without inventing a clawctl update command", () => {
-    const env = { OPENCLAW_SUPERVISOR_MODE: "external", OPENCLAW_SUPERVISOR_TYPE: "docker" };
+    const env = { OPENCLAW_SUPERVISOR_MODE: "docker" };
     expect(
-      formatExternalSupervisorUpdateRequired(resolveExternalSupervisorGuidance("update", env)),
+      formatExternalSupervisorUpdateRequired(resolveExternalSupervisorGuidance("update", env), env),
     ).toContain(
       "Update (Docker host): docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway",
     );
-    expect(
-      formatExternalSupervisorUpdateRequired(
-        resolveExternalSupervisorGuidance("update", {
-          ...env,
-          OPENCLAW_SUPERVISOR_TYPE: "clawctl",
-        }),
-      ),
-    ).toBe(formatExternalSupervisorUpdateRequired());
+    const clawctlEnv = { OPENCLAW_SUPERVISOR_MODE: "clawctl" };
+    const clawctlMessage = formatExternalSupervisorUpdateRequired(
+      resolveExternalSupervisorGuidance("update", clawctlEnv),
+      clawctlEnv,
+    );
+    expect(clawctlMessage).toContain("OPENCLAW_SUPERVISOR_MODE=clawctl");
+    expect(clawctlMessage).toContain("Use the external supervisor's update workflow");
+    expect(clawctlMessage).not.toContain("Update (Windows host session)");
   });
 });

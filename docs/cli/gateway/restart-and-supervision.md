@@ -157,7 +157,7 @@ remain protected.
 
 ### External supervisors
 
-Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
+Set `OPENCLAW_SUPERVISOR_MODE` to `external`, `docker`, or `clawctl` only when another process manager owns the Gateway lifecycle. All three values enable external supervision:
 
 - `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler. Exact-lock restart delivery runs inside that Gateway, so a replacement CLI does not migrate shared state before the old process hands off.
 - Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
@@ -198,21 +198,21 @@ External supervisor implementations should also apply these acceptance rules:
 
 #### Supervisor-specific instructions
 
-Set `OPENCLAW_SUPERVISOR_TYPE` alongside `OPENCLAW_SUPERVISOR_MODE=external`
-to show built-in commands for a supported deployment. Both values ignore case
-and surrounding whitespace. The type changes displayed instructions only; it
-does not grant lifecycle authority, run commands, or change the restart handoff.
-Set the variables in the environments of both the Gateway and the CLI processes
-that should show these instructions.
+Use `OPENCLAW_SUPERVISOR_MODE=docker` or `OPENCLAW_SUPERVISOR_MODE=clawctl`
+to enable external supervision with built-in commands for that deployment.
+`OPENCLAW_SUPERVISOR_MODE=external` keeps the existing generic instructions.
+Values ignore case and surrounding whitespace. All three modes preserve the
+same lifecycle restrictions and restart handoff; the preset commands are only
+displayed, never executed. Set the mode in both the Gateway and CLI process
+environments through the deployment owner.
 
-Supported types:
+| Mode       | Instructions                | Run commands from                                          |
+| ---------- | --------------------------- | ---------------------------------------------------------- |
+| `clawctl`  | clawctl commands            | Windows host session                                       |
+| `docker`   | Docker Compose commands     | Docker host, in the deployment's Compose project directory |
+| `external` | Generic supervisor guidance | Your deployment's management environment                   |
 
-| Type      | Display name   | Run commands from                                          |
-| --------- | -------------- | ---------------------------------------------------------- |
-| `clawctl` | clawctl        | Windows host session                                       |
-| `docker`  | Docker Compose | Docker host, in the deployment's Compose project directory |
-
-The `docker` type assumes the repository's `openclaw-gateway` service name and a
+The `docker` mode assumes the repository's `openclaw-gateway` service name and a
 published image that can be updated with `docker compose pull`. Opt in only when
 these commands match your deployment:
 
@@ -226,19 +226,25 @@ these commands match your deployment:
 
 The update command pulls the image selected by your Compose configuration. It
 does not change a pinned tag or rebuild a local image. The default Docker setup
-builds `openclaw:local`; leave the type unset for that workflow, customized
+builds `openclaw:local`; use `OPENCLAW_SUPERVISOR_MODE=external` for that workflow, customized
 service names, or other deployments whose commands differ. See
 [Compose operations](/install/docker/compose-operations).
 
-The `clawctl` type supplies `clawctl gateway-service start`,
+The `clawctl` mode supplies `clawctl gateway-service start`,
 `clawctl gateway-service stop`, and `clawctl gateway-service restart`. It does
 not supply install, uninstall, repair, or update commands. Docker has no built-in
 install or uninstall guidance either; those actions retain generic instructions.
 
-An unset or unrecognized type retains the existing generic supervisor guidance.
-Outside external mode, the type has no effect. The values select fixed built-in
-copy; there is no command payload, plugin configuration, or persistent guidance
-record. Running inside Docker does not automatically select the Docker type.
+An unset or unrecognized mode does not enable external supervision. Running
+inside Docker does not automatically select `docker`. The supported modes use
+fixed built-in copy; there is no command payload, plugin configuration, or
+persistent guidance record.
+
+Older OpenClaw versions recognize only `external`. Upgrade all Gateway and CLI
+processes before selecting `docker` or `clawctl`; keep `external` during a mixed
+version rollout. Before a downgrade, restore `OPENCLAW_SUPERVISOR_MODE=external`
+in the deployment environment so older processes retain external supervision.
+This requires no configuration migration.
 
 ### Gateway profiling
 

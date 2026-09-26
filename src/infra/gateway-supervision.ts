@@ -56,10 +56,7 @@ export function resolveExternalSupervisorGuidance(
   action: SupervisorAction,
   env: NodeJS.ProcessEnv = process.env,
 ): SupervisorDisplayGuidance | undefined {
-  if (!isGatewayExternallySupervised(env)) {
-    return undefined;
-  }
-  const type = env.OPENCLAW_SUPERVISOR_TYPE?.trim().toLowerCase();
+  const type = resolveGatewaySupervisorMode(env);
   if (type !== "docker" && type !== "clawctl") {
     return undefined;
   }
@@ -69,36 +66,40 @@ export function resolveExternalSupervisorGuidance(
 }
 
 export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
+  return resolveGatewaySupervisorMode(env) !== undefined;
 }
 
 export function formatExternalSupervisorActionRequired(
   action: string,
   guidance?: SupervisorDisplayGuidance,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
+  const mode = resolveGatewaySupervisorMode(env) ?? "external";
   if (guidance) {
     return [
-      `OpenClaw gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      `OpenClaw gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=${mode}).`,
       formatSupervisorCommand(guidance),
     ].join("\n");
   }
   return [
-    `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+    `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=${mode}).`,
     `Use that supervisor to ${action}.`,
   ].join(" ");
 }
 
 export function formatExternalSupervisorUpdateRequired(
   guidance?: SupervisorDisplayGuidance,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
+  const mode = resolveGatewaySupervisorMode(env) ?? "external";
   if (guidance) {
     return [
-      `OpenClaw self-update is disabled while gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      `OpenClaw self-update is disabled while gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=${mode}).`,
       formatSupervisorCommand(guidance),
     ].join("\n");
   }
   return [
-    `OpenClaw self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+    `OpenClaw self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=${mode}).`,
     "Use the external supervisor's update workflow so it can stop the gateway, update and finalize the runtime, then restart it safely.",
   ].join(" ");
 }
@@ -113,6 +114,7 @@ export function assertGatewayServiceMutationAllowed(
       formatExternalSupervisorActionRequired(
         action,
         supervisorAction ? resolveExternalSupervisorGuidance(supervisorAction, env) : undefined,
+        env,
       ),
     );
   }
@@ -159,4 +161,9 @@ export function resolveGatewayServiceMutationError(
 function formatSupervisorCommand(guidance: SupervisorDisplayGuidance): string {
   const action = guidance.action.charAt(0).toUpperCase() + guidance.action.slice(1);
   return `${action} (${guidance.runFrom}): ${guidance.command}`;
+}
+
+function resolveGatewaySupervisorMode(env: NodeJS.ProcessEnv) {
+  const mode = env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase();
+  return mode === "external" || mode === "docker" || mode === "clawctl" ? mode : undefined;
 }

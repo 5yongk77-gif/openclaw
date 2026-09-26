@@ -133,9 +133,8 @@ describe("external gateway supervision lifecycle", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_SUPERVISOR_TYPE"]);
+    envSnapshot = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    delete process.env.OPENCLAW_SUPERVISOR_TYPE;
 
     for (const mock of [
       service.readCommand,
@@ -201,7 +200,7 @@ describe("external gateway supervision lifecycle", () => {
   }
 
   it("restarts through the exact running Gateway without candidate state access", async () => {
-    process.env.OPENCLAW_SUPERVISOR_TYPE = "clawctl";
+    process.env.OPENCLAW_SUPERVISOR_MODE = "clawctl";
     const lockIdentity = { ...gatewayLockIdentity, port: 19_455 };
     readActiveGatewayLockPort.mockResolvedValue(19_455);
     readActiveGatewayLockIdentity.mockResolvedValue(lockIdentity);
@@ -415,7 +414,7 @@ describe("external gateway supervision lifecycle", () => {
     [
       "start",
       () => runDaemonStart({ json: true }),
-      "",
+      "external",
       "Use that supervisor to start the gateway.",
     ],
     [
@@ -436,8 +435,8 @@ describe("external gateway supervision lifecycle", () => {
       "clawctl",
       "Restart (Windows host session): clawctl gateway-service restart",
     ],
-  ])("blocks native %s lifecycle access", async (_action, run, type, expected) => {
-    process.env.OPENCLAW_SUPERVISOR_TYPE = type;
+  ])("blocks native %s lifecycle access", async (_action, run, mode, expected) => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = mode;
     await expect(run()).rejects.toThrow(expected);
 
     expect(runServiceStart).not.toHaveBeenCalled();

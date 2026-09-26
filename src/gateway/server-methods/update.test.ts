@@ -839,16 +839,15 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.mode).toBe("npm");
   });
 
-  it.each(["docker", "clawctl", "unknown", undefined])(
+  it.each(["docker", "clawctl", "external"])(
     "keeps external supervision authoritative and projects only supported update guidance (%s)",
-    async (supervisorType) => {
+    async (supervisorMode) => {
       mockGlobalInstallSurface();
       detectRespawnSupervisorMock.mockReturnValue("systemd");
 
       const payload = await withEnvAsync(
         {
-          OPENCLAW_SUPERVISOR_MODE: "external",
-          OPENCLAW_SUPERVISOR_TYPE: supervisorType,
+          OPENCLAW_SUPERVISOR_MODE: supervisorMode,
           OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
         },
         () => captureUpdateRunPayload(),
@@ -862,7 +861,7 @@ describe("update.run restart scheduling", () => {
         mode: "npm",
         reason: "external-supervisor-update-required",
       });
-      if (supervisorType === "docker") {
+      if (supervisorMode === "docker") {
         expect(payload?.externalSupervisorGuidance).toEqual({
           action: "update",
           name: "Docker Compose",

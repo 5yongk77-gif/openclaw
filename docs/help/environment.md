@@ -99,16 +99,17 @@ the `openclaw` subtree are preserved.
 
 ### External supervisor guidance
 
-| Variable                   | Purpose                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_SUPERVISOR_MODE` | Set to `external` when another process manager owns the Gateway lifecycle.                                                          |
-| `OPENCLAW_SUPERVISOR_TYPE` | Optional built-in instruction preset: `docker` or `clawctl`. Requires external mode; unset or unknown values keep generic guidance. |
+| Variable                   | Purpose                                                                                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_SUPERVISOR_MODE` | `external`, `docker`, or `clawctl` declares external lifecycle ownership. `external` shows generic instructions; the other values select built-in deployment commands. |
 
-Values ignore surrounding whitespace and case. Set them in the Gateway and CLI
-process environments through the deployment owner. The type changes display-only
-commands, not lifecycle permissions. The Docker preset assumes a published image
-and the `openclaw-gateway` Compose service; local image builds and customized
-deployments should leave it unset. See
+Values ignore surrounding whitespace and case. Unset or unknown values do not
+enable external supervision. Set the mode in the Gateway and CLI process
+environments through the deployment owner. The commands are display-only. The
+Docker preset assumes a published image and the `openclaw-gateway` Compose
+service; use `external` for local image builds or customized deployments.
+Older versions recognize only `external`; use it during mixed version rollouts
+and restore it before a downgrade. See
 [Supervisor-specific instructions](/cli/gateway/restart-and-supervision#supervisor-specific-instructions)
 for supported commands and execution locations.
 

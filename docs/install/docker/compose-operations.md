@@ -18,21 +18,22 @@ Docker-specific instructions for blocked service and update operations. Add to
 the deployment's `.env` file, which the repository Compose services import:
 
 ```dotenv
-OPENCLAW_SUPERVISOR_MODE=external
-OPENCLAW_SUPERVISOR_TYPE=docker
+OPENCLAW_SUPERVISOR_MODE=docker
 ```
 
 Recreate the Gateway container to apply the process environment. CLI processes
-also need these values to display the same instructions. The commands are meant
+also need this mode to apply the same external supervision and instructions. The commands are meant
 for the Docker host, in the Compose project directory; OpenClaw displays them
 without running them.
 
 The update instruction is `docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway`.
 It pulls the currently configured image tag. It does not advance a pinned tag or
-rebuild an image. The default setup builds `openclaw:local`, so leave
-`OPENCLAW_SUPERVISOR_TYPE` unset for local builds or a customized Compose service
+rebuild an image. The default setup builds `openclaw:local`, so use
+`OPENCLAW_SUPERVISOR_MODE=external` for local builds or a customized Compose service
 name. Keep your deployment's existing image maintenance procedure in those cases.
-This opt-in is not added automatically by Docker setup. See
+Upgrade all Gateway and CLI processes before selecting `docker`. Older versions
+recognize only `external`; restore that mode in the deployment environment before
+a downgrade. This opt-in is not added automatically by Docker setup. See
 [Supervisor-specific instructions](/cli/gateway/restart-and-supervision#supervisor-specific-instructions)
 for all supported actions and fallback behavior.
 

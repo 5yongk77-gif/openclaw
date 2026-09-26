@@ -95,8 +95,7 @@ describe("update history RPCs", () => {
       status: "skipped",
       reason: "external-supervisor-update-required",
     });
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-    vi.stubEnv("OPENCLAW_SUPERVISOR_TYPE", "docker");
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "docker");
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -109,17 +108,12 @@ describe("update history RPCs", () => {
       }),
     );
     expect(getUpdateRun(run.runId)).not.toHaveProperty("externalSupervisorGuidance");
-    for (const supervisorType of ["clawctl", "unknown", undefined]) {
-      vi.stubEnv("OPENCLAW_SUPERVISOR_TYPE", supervisorType);
+    for (const supervisorMode of ["external", "clawctl", "unknown", undefined]) {
+      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", supervisorMode);
       const response = await requestUpdateRead("update.status");
       expect(response.mock.calls[0]?.[0]).toBe(true);
       expect(response.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
     }
-    vi.stubEnv("OPENCLAW_SUPERVISOR_TYPE", "docker");
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
-    const response = await requestUpdateRead("update.status");
-    expect(response.mock.calls[0]?.[0]).toBe(true);
-    expect(response.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
   });
 
   it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
