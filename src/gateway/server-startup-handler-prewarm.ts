@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
@@ -41,6 +42,7 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {
+  scheduler: GatewayScheduler;
   cfgAtStart: OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
@@ -71,6 +73,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
       currentItemName = item.name;
       const load = () => item.load();
       idleTask = scheduleGatewayIdleTask({
+        id: "startup:handler-prewarm",
+        scheduler: params.scheduler,
         delayMs: 0,
         retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
         isClosing: () => stopped,

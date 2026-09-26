@@ -41,6 +41,7 @@ import {
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -1755,6 +1756,7 @@ describe("startGatewayPostAttachRuntime", () => {
       throw new Error("Expected request work admission");
     }
     const sidecar = scheduleContextCachePrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => currentConfig,
       log: { warn: vi.fn() },
     });
@@ -1786,6 +1788,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("cancels context-window cache prewarm when the gateway stops first", async () => {
     vi.useFakeTimers();
     const sidecar = scheduleContextCachePrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}) as never,
       log: { warn: vi.fn() },
     });
@@ -4661,6 +4664,7 @@ function createPostAttachRuntimeDeps(
 function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): PostAttachParams {
   const startupSignal = new AbortController().signal;
   return {
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,

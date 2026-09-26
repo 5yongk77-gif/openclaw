@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
@@ -10,6 +11,7 @@ type StartupTrace = {
 };
 
 export function scheduleContextCachePrewarm(params: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
@@ -31,6 +33,8 @@ export function scheduleContextCachePrewarm(params: {
   // Source-backed provider discovery can consume the main thread. Give
   // readiness probes and immediate client work a clean event-loop window.
   const idleTask = scheduleGatewayIdleTask({
+    id: "startup:context-cache-prewarm",
+    scheduler: params.scheduler,
     delayMs: CONTEXT_CACHE_PREWARM_START_DELAY_MS,
     retryDelayMs: CONTEXT_CACHE_PREWARM_RETRY_DELAY_MS,
     isClosing: () => stopped,
