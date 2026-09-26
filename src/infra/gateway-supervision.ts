@@ -7,18 +7,96 @@ export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-u
 export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
   "service management skipped: non-default state dir or config path";
 
+export type SupervisorAction =
+  | "start"
+  | "stop"
+  | "restart"
+  | "install"
+  | "uninstall"
+  | "repair"
+  | "update";
+
+export type SupervisorDisplayGuidance = {
+  action: SupervisorAction;
+  name: string;
+  runFrom: string;
+  command: string;
+};
+
+type SupervisorPreset = {
+  name: string;
+  runFrom: string;
+  actions: Partial<Record<SupervisorAction, string>>;
+};
+
+const SUPERVISOR_PRESETS = {
+  docker: {
+    name: "Docker Compose",
+    runFrom: "Docker host",
+    actions: {
+      start: "docker compose up -d openclaw-gateway",
+      stop: "docker compose stop openclaw-gateway",
+      restart: "docker compose restart openclaw-gateway",
+      repair: "docker compose up -d --force-recreate openclaw-gateway",
+      update: "docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway",
+    },
+  },
+  clawctl: {
+    name: "clawctl",
+    runFrom: "Windows host session",
+    actions: {
+      start: "clawctl gateway-service start",
+      stop: "clawctl gateway-service stop",
+      restart: "clawctl gateway-service restart",
+    },
+  },
+} satisfies Record<string, SupervisorPreset>;
+
+export function resolveExternalSupervisorGuidance(
+  action: SupervisorAction,
+  env: NodeJS.ProcessEnv = process.env,
+): SupervisorDisplayGuidance | undefined {
+  if (!isGatewayExternallySupervised(env)) {
+    return undefined;
+  }
+  const type = env.OPENCLAW_SUPERVISOR_TYPE?.trim().toLowerCase();
+  if (type !== "docker" && type !== "clawctl") {
+    return undefined;
+  }
+  const preset: SupervisorPreset = SUPERVISOR_PRESETS[type];
+  const command = preset.actions[action];
+  return command ? { action, name: preset.name, runFrom: preset.runFrom, command } : undefined;
+}
+
 export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
-export function formatExternalSupervisorActionRequired(action: string): string {
+export function formatExternalSupervisorActionRequired(
+  action: string,
+  guidance?: SupervisorDisplayGuidance,
+): string {
+  if (guidance) {
+    return [
+      `OpenClaw gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      formatSupervisorCommand(guidance),
+    ].join("\n");
+  }
   return [
     `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     `Use that supervisor to ${action}.`,
   ].join(" ");
 }
 
-export function formatExternalSupervisorUpdateRequired(): string {
+export function formatExternalSupervisorUpdateRequired(
+  guidance?: SupervisorDisplayGuidance,
+): string {
+  if (guidance) {
+    return [
+      `OpenClaw self-update is disabled while gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      formatSupervisorCommand(guidance),
+    ].join("\n");
+  }
   return [
     `OpenClaw self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     "Use the external supervisor's update workflow so it can stop the gateway, update and finalize the runtime, then restart it safely.",
@@ -28,9 +106,15 @@ export function formatExternalSupervisorUpdateRequired(): string {
 export function assertGatewayServiceMutationAllowed(
   action: string,
   env: NodeJS.ProcessEnv = process.env,
+  supervisorAction?: SupervisorAction,
 ): void {
   if (isGatewayExternallySupervised(env)) {
-    throw new Error(formatExternalSupervisorActionRequired(action));
+    throw new Error(
+      formatExternalSupervisorActionRequired(
+        action,
+        supervisorAction ? resolveExternalSupervisorGuidance(supervisorAction, env) : undefined,
+      ),
+    );
   }
   const conflictingProfile = resolveNativeServiceProfileConflict(env);
   if (conflictingProfile) {
@@ -62,11 +146,17 @@ export function assertGatewayServiceMutationAllowed(
 export function resolveGatewayServiceMutationError(
   action: string,
   env: NodeJS.ProcessEnv = process.env,
+  supervisorAction?: SupervisorAction,
 ): Error | null {
   try {
-    assertGatewayServiceMutationAllowed(action, env);
+    assertGatewayServiceMutationAllowed(action, env, supervisorAction);
     return null;
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
+}
+
+function formatSupervisorCommand(guidance: SupervisorDisplayGuidance): string {
+  const action = guidance.action.charAt(0).toUpperCase() + guidance.action.slice(1);
+  return `${action} (${guidance.runFrom}): ${guidance.command}`;
 }

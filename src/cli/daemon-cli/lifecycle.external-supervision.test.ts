@@ -133,8 +133,9 @@ describe("external gateway supervision lifecycle", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
+    envSnapshot = captureEnv(["OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_SUPERVISOR_TYPE"]);
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    delete process.env.OPENCLAW_SUPERVISOR_TYPE;
 
     for (const mock of [
       service.readCommand,
@@ -200,6 +201,7 @@ describe("external gateway supervision lifecycle", () => {
   }
 
   it("restarts through the exact running Gateway without candidate state access", async () => {
+    process.env.OPENCLAW_SUPERVISOR_TYPE = "clawctl";
     const lockIdentity = { ...gatewayLockIdentity, port: 19_455 };
     readActiveGatewayLockPort.mockResolvedValue(19_455);
     readActiveGatewayLockIdentity.mockResolvedValue(lockIdentity);
@@ -410,12 +412,33 @@ describe("external gateway supervision lifecycle", () => {
   });
 
   it.each([
-    ["start", () => runDaemonStart({ json: true })],
-    ["stop", () => runDaemonStop({ json: true })],
-    ["uninstall", () => runDaemonUninstall({ json: true })],
-    ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
-  ])("blocks native %s lifecycle access", async (_action, run) => {
-    await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
+    [
+      "start",
+      () => runDaemonStart({ json: true }),
+      "",
+      "Use that supervisor to start the gateway.",
+    ],
+    [
+      "stop",
+      () => runDaemonStop({ json: true }),
+      "docker",
+      "Stop (Docker host): docker compose stop openclaw-gateway",
+    ],
+    [
+      "uninstall",
+      () => runDaemonUninstall({ json: true }),
+      "docker",
+      "Use that supervisor to uninstall the gateway service.",
+    ],
+    [
+      "preserved restart",
+      () => runDaemonRestart({ json: true, preserveDefinition: true }),
+      "clawctl",
+      "Restart (Windows host session): clawctl gateway-service restart",
+    ],
+  ])("blocks native %s lifecycle access", async (_action, run, type, expected) => {
+    process.env.OPENCLAW_SUPERVISOR_TYPE = type;
+    await expect(run()).rejects.toThrow(expected);
 
     expect(runServiceStart).not.toHaveBeenCalled();
     expect(runServiceRestart).not.toHaveBeenCalled();

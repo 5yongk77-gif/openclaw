@@ -196,6 +196,50 @@ External supervisor implementations should also apply these acceptance rules:
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
 - Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 
+#### Supervisor-specific instructions
+
+Set `OPENCLAW_SUPERVISOR_TYPE` alongside `OPENCLAW_SUPERVISOR_MODE=external`
+to show built-in commands for a supported deployment. Both values ignore case
+and surrounding whitespace. The type changes displayed instructions only; it
+does not grant lifecycle authority, run commands, or change the restart handoff.
+Set the variables in the environments of both the Gateway and the CLI processes
+that should show these instructions.
+
+Supported types:
+
+| Type      | Display name   | Run commands from                                          |
+| --------- | -------------- | ---------------------------------------------------------- |
+| `clawctl` | clawctl        | Windows host session                                       |
+| `docker`  | Docker Compose | Docker host, in the deployment's Compose project directory |
+
+The `docker` type assumes the repository's `openclaw-gateway` service name and a
+published image that can be updated with `docker compose pull`. Opt in only when
+these commands match your deployment:
+
+| Action  | Docker Compose command                                                          |
+| ------- | ------------------------------------------------------------------------------- |
+| Start   | `docker compose up -d openclaw-gateway`                                         |
+| Stop    | `docker compose stop openclaw-gateway`                                          |
+| Restart | `docker compose restart openclaw-gateway`                                       |
+| Repair  | `docker compose up -d --force-recreate openclaw-gateway`                        |
+| Update  | `docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway` |
+
+The update command pulls the image selected by your Compose configuration. It
+does not change a pinned tag or rebuild a local image. The default Docker setup
+builds `openclaw:local`; leave the type unset for that workflow, customized
+service names, or other deployments whose commands differ. See
+[Compose operations](/install/docker/compose-operations).
+
+The `clawctl` type supplies `clawctl gateway-service start`,
+`clawctl gateway-service stop`, and `clawctl gateway-service restart`. It does
+not supply install, uninstall, repair, or update commands. Docker has no built-in
+install or uninstall guidance either; those actions retain generic instructions.
+
+An unset or unrecognized type retains the existing generic supervisor guidance.
+Outside external mode, the type has no effect. The values select fixed built-in
+copy; there is no command payload, plugin configuration, or persistent guidance
+record. Running inside Docker does not automatically select the Docker type.
+
 ### Gateway profiling
 
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work). The `process.bootstrap` breakdown includes earlier CLI imports, configuration, database admission, session inventory, and workspace readiness. Each bootstrap step records its process-relative `start`, duration, call count, and available fleet counts; repeated calls aggregate under one name. The `ready` trace repeats the step names and totals in `bootstrapSteps`. Nested steps overlap, so their durations should not be added together.

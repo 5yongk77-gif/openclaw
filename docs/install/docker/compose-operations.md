@@ -10,6 +10,32 @@ sidebarTitle: "Compose operations"
 
 The Compose command table that replaced ClawDock, the operational accordions, and how published images are refreshed. Part of the [Docker](/install/docker) guide.
 
+## Supervisor instructions for published images
+
+If Docker Compose owns the Gateway lifecycle and your deployment uses a published
+image with the repository's `openclaw-gateway` service name, you can opt in to
+Docker-specific instructions for blocked service and update operations. Add to
+the deployment's `.env` file, which the repository Compose services import:
+
+```dotenv
+OPENCLAW_SUPERVISOR_MODE=external
+OPENCLAW_SUPERVISOR_TYPE=docker
+```
+
+Recreate the Gateway container to apply the process environment. CLI processes
+also need these values to display the same instructions. The commands are meant
+for the Docker host, in the Compose project directory; OpenClaw displays them
+without running them.
+
+The update instruction is `docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway`.
+It pulls the currently configured image tag. It does not advance a pinned tag or
+rebuild an image. The default setup builds `openclaw:local`, so leave
+`OPENCLAW_SUPERVISOR_TYPE` unset for local builds or a customized Compose service
+name. Keep your deployment's existing image maintenance procedure in those cases.
+This opt-in is not added automatically by Docker setup. See
+[Supervisor-specific instructions](/cli/gateway/restart-and-supervision#supervisor-specific-instructions)
+for all supported actions and fallback behavior.
+
 ## ClawDock migration
 
 ClawDock has been removed. Use Docker Compose directly for day-to-day operations.

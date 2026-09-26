@@ -17,7 +17,10 @@ import {
 } from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
+import {
+  formatExternalSupervisorActionRequired,
+  resolveExternalSupervisorGuidance,
+} from "../infra/gateway-supervision.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -590,7 +593,9 @@ export async function applySystemAgentSetup(
             lines.push(`Gateway: not reachable yet (${detail}) — say \`gateway status\` to check`);
           }
         } else if (gateway.reason === "external") {
-          lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
+          lines.push(
+            `Gateway: ${formatExternalSupervisorActionRequired("start the gateway", resolveExternalSupervisorGuidance("start"))}`,
+          );
         } else if (params.installDaemon === false) {
           lines.push(
             "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
